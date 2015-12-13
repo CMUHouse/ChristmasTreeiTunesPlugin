@@ -153,7 +153,7 @@ struct VisualPluginInitMessage {
 typedef struct VisualPluginInitMessage VisualPluginInitMessage;
 
 struct VisualPluginActivateMessage {
-	VISUAL_PLATFORM_VIEW			view;					/* Input - plugin should draw in entire bounds */
+	__unsafe_unretained VISUAL_PLATFORM_VIEW			view;					/* Input - plugin should draw in entire bounds */
 	OptionBits						options;				/* Input */
 };
 typedef struct VisualPluginActivateMessage VisualPluginActivateMessage;

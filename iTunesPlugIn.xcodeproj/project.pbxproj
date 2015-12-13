@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		17632EEE1C1CDF130044E325 /* ORSSerialBuffer.h in Headers */ = {isa = PBXBuildFile; fileRef = 17632EE81C1CDF130044E325 /* ORSSerialBuffer.h */; };
+		17632EEF1C1CDF130044E325 /* ORSSerialBuffer.m in Sources */ = {isa = PBXBuildFile; fileRef = 17632EE91C1CDF130044E325 /* ORSSerialBuffer.m */; };
+		17632EF01C1CDF130044E325 /* ORSSerialPacketDescriptor.h in Headers */ = {isa = PBXBuildFile; fileRef = 17632EEA1C1CDF130044E325 /* ORSSerialPacketDescriptor.h */; };
+		17632EF11C1CDF130044E325 /* ORSSerialPacketDescriptor.m in Sources */ = {isa = PBXBuildFile; fileRef = 17632EEB1C1CDF130044E325 /* ORSSerialPacketDescriptor.m */; };
+		17632EF21C1CDF130044E325 /* ORSSerialRequest.h in Headers */ = {isa = PBXBuildFile; fileRef = 17632EEC1C1CDF130044E325 /* ORSSerialRequest.h */; };
+		17632EF31C1CDF130044E325 /* ORSSerialRequest.m in Sources */ = {isa = PBXBuildFile; fileRef = 17632EED1C1CDF130044E325 /* ORSSerialRequest.m */; };
 		17FB49831C17F72700C51DAA /* CoreImage.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 17FB49821C17F72700C51DAA /* CoreImage.framework */; };
 		4336E63D1878A9A4002C10E6 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4336E63C1878A9A4002C10E6 /* QuartzCore.framework */; };
 		4336E6421878AA88002C10E6 /* ORSSerialPort.h in Headers */ = {isa = PBXBuildFile; fileRef = 4336E63E1878AA88002C10E6 /* ORSSerialPort.h */; };
@@ -31,6 +37,12 @@
 		01285C0300CC31B17F000001 /* iTunesVisualAPI.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = iTunesVisualAPI.h; sourceTree = "<group>"; };
 		01285C0700CC38597F000001 /* iTunesPlugInMac.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; path = iTunesPlugInMac.mm; sourceTree = "<group>"; };
 		089C167EFE841241C02AAC07 /* English */ = {isa = PBXFileReference; fileEncoding = 10; lastKnownFileType = text.plist.strings; name = English; path = English.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		17632EE81C1CDF130044E325 /* ORSSerialBuffer.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ORSSerialBuffer.h; sourceTree = "<group>"; };
+		17632EE91C1CDF130044E325 /* ORSSerialBuffer.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ORSSerialBuffer.m; sourceTree = "<group>"; };
+		17632EEA1C1CDF130044E325 /* ORSSerialPacketDescriptor.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ORSSerialPacketDescriptor.h; sourceTree = "<group>"; };
+		17632EEB1C1CDF130044E325 /* ORSSerialPacketDescriptor.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ORSSerialPacketDescriptor.m; sourceTree = "<group>"; };
+		17632EEC1C1CDF130044E325 /* ORSSerialRequest.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ORSSerialRequest.h; sourceTree = "<group>"; };
+		17632EED1C1CDF130044E325 /* ORSSerialRequest.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ORSSerialRequest.m; sourceTree = "<group>"; };
 		17FB49821C17F72700C51DAA /* CoreImage.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreImage.framework; path = System/Library/Frameworks/CoreImage.framework; sourceTree = SDKROOT; };
 		4336E63C1878A9A4002C10E6 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		4336E63E1878AA88002C10E6 /* ORSSerialPort.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ORSSerialPort.h; sourceTree = "<group>"; };
@@ -110,6 +122,12 @@
 		08FB77AFFE84173DC02AAC07 /* Source */ = {
 			isa = PBXGroup;
 			children = (
+				17632EE81C1CDF130044E325 /* ORSSerialBuffer.h */,
+				17632EE91C1CDF130044E325 /* ORSSerialBuffer.m */,
+				17632EEA1C1CDF130044E325 /* ORSSerialPacketDescriptor.h */,
+				17632EEB1C1CDF130044E325 /* ORSSerialPacketDescriptor.m */,
+				17632EEC1C1CDF130044E325 /* ORSSerialRequest.h */,
+				17632EED1C1CDF130044E325 /* ORSSerialRequest.m */,
 				4336E63E1878AA88002C10E6 /* ORSSerialPort.h */,
 				4336E63F1878AA88002C10E6 /* ORSSerialPort.m */,
 				4336E6401878AA88002C10E6 /* ORSSerialPortManager.h */,
@@ -139,9 +157,12 @@
 			files = (
 				DC2667950BD9410900B4ED68 /* iTunesAPI.h in Headers */,
 				DC2667960BD9410900B4ED68 /* iTunesVisualAPI.h in Headers */,
+				17632EF01C1CDF130044E325 /* ORSSerialPacketDescriptor.h in Headers */,
 				4336E6441878AA88002C10E6 /* ORSSerialPortManager.h in Headers */,
 				4336E6421878AA88002C10E6 /* ORSSerialPort.h in Headers */,
+				17632EF21C1CDF130044E325 /* ORSSerialRequest.h in Headers */,
 				DC8CE75A13A34EB500963E07 /* iTunesPlugIn.h in Headers */,
+				17632EEE1C1CDF130044E325 /* ORSSerialBuffer.h in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -212,8 +233,11 @@
 			files = (
 				DC26679C0BD9410900B4ED68 /* iTunesPlugInMac.mm in Sources */,
 				9542E97313D61AE600EE8D31 /* iTunesPlugIn.cpp in Sources */,
+				17632EF31C1CDF130044E325 /* ORSSerialRequest.m in Sources */,
+				17632EEF1C1CDF130044E325 /* ORSSerialBuffer.m in Sources */,
 				4336E6451878AA88002C10E6 /* ORSSerialPortManager.m in Sources */,
 				9542E97513D61AFE00EE8D31 /* iTunesAPI.cpp in Sources */,
+				17632EF11C1CDF130044E325 /* ORSSerialPacketDescriptor.m in Sources */,
 				4336E6431878AA88002C10E6 /* ORSSerialPort.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -243,7 +267,7 @@
 		AF2F40460BD811FE009D75EB /* Development */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CLANG_ENABLE_OBJC_ARC = NO;
+				CLANG_ENABLE_OBJC_ARC = YES;
 				MACOSX_DEPLOYMENT_TARGET = "";
 				SDKROOT = macosx;
 			};
@@ -253,7 +277,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = "$(ARCHS_STANDARD)";
-				CLANG_ENABLE_OBJC_ARC = NO;
+				CLANG_ENABLE_OBJC_ARC = YES;
 				MACOSX_DEPLOYMENT_TARGET = "";
 				SDKROOT = macosx;
 			};

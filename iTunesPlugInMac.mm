@@ -57,6 +57,7 @@
 #import <string.h>
 #include <stdio.h>
 #import "ORSSerialPort.h"
+#import "ORSSerialPortManager.h"
 
 #include <vector>
 #include <algorithm>
@@ -86,7 +87,7 @@ extern "C" OSStatus iTunesPluginMainMachO( OSType inMessage, PluginMessageInfo *
 //	VisualView
 //-------------------------------------------------------------------------------------------------
 
-@interface VisualView : NSView
+@interface VisualView : NSView <ORSSerialPortDelegate>
 {
 	VisualPluginData *	_visualPluginData;
 }
@@ -99,7 +100,7 @@ extern "C" OSStatus iTunesPluginMainMachO( OSType inMessage, PluginMessageInfo *
 - (BOOL)resignFirstResponder;
 -(void)keyDown:(NSEvent *)theEvent;
 
-@property (nonatomic, assign) ORSSerialPort * serialPort;
+@property (nonatomic, strong) ORSSerialPort * serialPort;
 
 @end
 
@@ -382,7 +383,7 @@ void DrawVisual( VisualPluginData * visualPluginData, ORSSerialPort* serialPort 
         CFTimeInterval currTime = CACurrentMediaTime();
         CFTimeInterval delta = currTime - prevTime;
         
-        if ((delta * 1000 >= 33))
+        if ((delta * 1000 >= 100))
         {
             treeBits = treeBits | queuedTreeBits;
             prevTreeBits = treeBits;
@@ -566,13 +567,12 @@ void DrawVisual( VisualPluginData * visualPluginData, ORSSerialPort* serialPort 
 void UpdateArtwork( VisualPluginData * visualPluginData, CFDataRef coverArt, UInt32 coverArtSize, UInt32 coverArtFormat )
 {
 	// release current image
-	[visualPluginData->currentArtwork release];
 	visualPluginData->currentArtwork = NULL;
 	
 	// create 100x100 NSImage* out of incoming CFDataRef if non-null (null indicates there is no artwork for the current track)
 	if ( coverArt != NULL )
 	{
-		visualPluginData->currentArtwork = [[NSImage alloc] initWithData:(NSData*)coverArt];
+		visualPluginData->currentArtwork = [[NSImage alloc] initWithData:(__bridge NSData*)coverArt];
 		
 		[visualPluginData->currentArtwork setSize:CGSizeMake( 100, 100 )];
 	}
@@ -650,9 +650,7 @@ OSStatus DeactivateVisual( VisualPluginData * visualPluginData )
 {
 #if USE_SUBVIEW
 	[visualPluginData->subview removeFromSuperview];
-	[visualPluginData->subview autorelease];
 	visualPluginData->subview = NULL;
-	[visualPluginData->currentArtwork release];
 	visualPluginData->currentArtwork = NULL;
 #endif
 
@@ -700,6 +698,12 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
 
 @synthesize visualPluginData = _visualPluginData;
 
+- (void)dealloc
+{
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    [nc removeObserver:self];
+}
+
 //-------------------------------------------------------------------------------------------------
 //	isOpaque
 //-------------------------------------------------------------------------------------------------
@@ -731,45 +735,73 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
 	return YES;
 }
 
+- (void)cleanupSerial
+{
+    if (self.serialPort) {
+        [self.serialPort close];
+        self.serialPort.delegate = nil;
+        self.serialPort = nil;
+    }
+}
+
+- (void)setupSerialPort
+{
+    static ORSSerialPortManager* sSerialMgr = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        sSerialMgr = [ORSSerialPortManager sharedSerialPortManager];
+    });
+    
+    if (self.serialPort == nil) {
+        
+        NSArray* availablePorts = [[ORSSerialPortManager sharedSerialPortManager] availablePorts];
+        ORSSerialPort* foundPort = nil;
+        for (ORSSerialPort* port in availablePorts) {
+            
+            NSString* path = port.path;
+            
+            if ([path hasPrefix:@"/dev/tty.usbserial"] ||
+                [path hasPrefix:@"/dev/cu.usbserial"] ||
+                [path hasPrefix:@"/dev/tty.usbmodem"] ||
+                [path hasPrefix:@"/dev/cu.usbmodem"]) {
+                
+                foundPort = port;
+                break;
+            }
+        }
+        
+        if (foundPort) {
+            
+            NSLog(@"Christmas Tree Visualizer: found serial port name %@, path %@", foundPort.name, foundPort.path);
+            self.serialPort = foundPort;
+            if (self.serialPort) {
+                self.serialPort.delegate = self;
+                self.serialPort.baudRate = [NSNumber numberWithInteger:115200];
+                [self.serialPort open];
+            }
+        } else {
+            NSLog(@"Could not find valid Serial port\n");
+        }
+    }
+}
+
+- (void)serialPortsWereConnected:(NSNotificationCenter*)notification
+{
+    [self setupSerialPort];
+}
+
 //-------------------------------------------------------------------------------------------------
 //	becomeFirstResponder
 //-------------------------------------------------------------------------------------------------
 //
 - (BOOL)becomeFirstResponder
 {
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    [nc addObserver:self selector:@selector(serialPortsWereConnected:) name:ORSSerialPortsWereConnectedNotification object:nil];
     
-    if (_serialPort == nil) {
-        
-        NSFileManager* fileMgr = [NSFileManager defaultManager];
-        NSArray* filePaths = [fileMgr subpathsAtPath:@"/dev"];
-        
-        NSString* usb_modem_path = nil;
-        for (NSString* path in filePaths) {
-            
-            if ([path hasPrefix:@"tty.usbserial"] || [path hasPrefix:@"tty.usbmodem"]) {
-                usb_modem_path = path;
-                break;
-            }
-        }
-        
-        if (usb_modem_path) {
-            
-            NSString* serialPortName = [NSString stringWithFormat:@"/dev/%@", usb_modem_path];
-            
-            NSLog(@"Christmas Tree Visualizer: found serial port name %@", serialPortName);
-            
-            _serialPort = [ORSSerialPort serialPortWithPath:serialPortName];
-            _serialPort.baudRate = [NSNumber numberWithInteger:115200];
-            [_serialPort open];
-            
-            usleep(500000);
-            
-        } else {
-            NSLog(@"Christmas Tree Visualizer Error: Could not make a serial port connection");
-        }
-    }
+    [self setupSerialPort];
     
-	return YES;
+    return YES;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -778,10 +810,11 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
 //
 - (BOOL)resignFirstResponder
 {
-    if (_serialPort) {
-        [_serialPort close];
-    }
-    
+   [self cleanupSerial];
+
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    [nc removeObserver:self];
+
 	return YES;
 }
 
@@ -804,6 +837,19 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
 	// Pass all unhandled events up to super so that iTunes can handle them.
 	[super keyDown:theEvent];
 }
+
+#pragma mark ORSSerialPortDelegate
+
+- (void)serialPort:(ORSSerialPort *)serialPort didReceiveData:(NSData *)data
+{
+    
+}
+
+- (void)serialPortWasRemovedFromSystem:(ORSSerialPort *)serialPort
+{
+    [self cleanupSerial];
+}
+
 
 @end
 
