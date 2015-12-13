@@ -66,8 +66,6 @@
 #include <deque>
 #include <bitset>
 
-#import <CoreImage/CoreImage.h>
-
 using namespace std;
 
 //-------------------------------------------------------------------------------------------------
@@ -415,7 +413,7 @@ void DrawVisual( VisualPluginData * visualPluginData, ORSSerialPort* serialPort 
         }
     }
     
-    if (kEmitSimpleBits) {
+    if (kEmitSimpleBits && spectSum > 0) {
 
 
         
@@ -428,7 +426,7 @@ void DrawVisual( VisualPluginData * visualPluginData, ORSSerialPort* serialPort 
     }
     
     
-    if (kEmitLEDRibbonIntensity) {
+    if (kEmitLEDRibbonIntensity && spectSum > 0) {
         
         static CFTimeInterval prevTime = 0;
 

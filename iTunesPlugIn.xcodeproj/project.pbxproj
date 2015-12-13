@@ -13,7 +13,6 @@
 		17632EF11C1CDF130044E325 /* ORSSerialPacketDescriptor.m in Sources */ = {isa = PBXBuildFile; fileRef = 17632EEB1C1CDF130044E325 /* ORSSerialPacketDescriptor.m */; };
 		17632EF21C1CDF130044E325 /* ORSSerialRequest.h in Headers */ = {isa = PBXBuildFile; fileRef = 17632EEC1C1CDF130044E325 /* ORSSerialRequest.h */; };
 		17632EF31C1CDF130044E325 /* ORSSerialRequest.m in Sources */ = {isa = PBXBuildFile; fileRef = 17632EED1C1CDF130044E325 /* ORSSerialRequest.m */; };
-		17FB49831C17F72700C51DAA /* CoreImage.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 17FB49821C17F72700C51DAA /* CoreImage.framework */; };
 		4336E63D1878A9A4002C10E6 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4336E63C1878A9A4002C10E6 /* QuartzCore.framework */; };
 		4336E6421878AA88002C10E6 /* ORSSerialPort.h in Headers */ = {isa = PBXBuildFile; fileRef = 4336E63E1878AA88002C10E6 /* ORSSerialPort.h */; };
 		4336E6431878AA88002C10E6 /* ORSSerialPort.m in Sources */ = {isa = PBXBuildFile; fileRef = 4336E63F1878AA88002C10E6 /* ORSSerialPort.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
@@ -43,7 +42,6 @@
 		17632EEB1C1CDF130044E325 /* ORSSerialPacketDescriptor.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ORSSerialPacketDescriptor.m; sourceTree = "<group>"; };
 		17632EEC1C1CDF130044E325 /* ORSSerialRequest.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ORSSerialRequest.h; sourceTree = "<group>"; };
 		17632EED1C1CDF130044E325 /* ORSSerialRequest.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ORSSerialRequest.m; sourceTree = "<group>"; };
-		17FB49821C17F72700C51DAA /* CoreImage.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreImage.framework; path = System/Library/Frameworks/CoreImage.framework; sourceTree = SDKROOT; };
 		4336E63C1878A9A4002C10E6 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		4336E63E1878AA88002C10E6 /* ORSSerialPort.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ORSSerialPort.h; sourceTree = "<group>"; };
 		4336E63F1878AA88002C10E6 /* ORSSerialPort.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ORSSerialPort.m; sourceTree = "<group>"; };
@@ -65,7 +63,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				17FB49831C17F72700C51DAA /* CoreImage.framework in Frameworks */,
 				4336E6471878AAAC002C10E6 /* IOKit.framework in Frameworks */,
 				4336E63D1878A9A4002C10E6 /* QuartzCore.framework in Frameworks */,
 				4CB29153145C010D00B1274E /* Cocoa.framework in Frameworks */,
@@ -89,7 +86,6 @@
 		089C166AFE841209C02AAC07 /* iTunesPlugIn */ = {
 			isa = PBXGroup;
 			children = (
-				17FB49821C17F72700C51DAA /* CoreImage.framework */,
 				08FB77AFFE84173DC02AAC07 /* Source */,
 				089C167CFE841241C02AAC07 /* Resources */,
 				089C1671FE841209C02AAC07 /* External Frameworks and Libraries */,
