@@ -122,8 +122,19 @@
 		08FB77AFFE84173DC02AAC07 /* Source */ = {
 			isa = PBXGroup;
 			children = (
-				17F536AF1FD7CAE30005DF62 /* GCDAsyncUdpSocket.h */,
-				17F536AE1FD7CAE30005DF62 /* GCDAsyncUdpSocket.m */,
+				17F536B31FD7CED90005DF62 /* UDP */,
+				17F536B21FD7CECD0005DF62 /* Serial */,
+				DC8CE75913A34EB500963E07 /* iTunesPlugIn.h */,
+				9542E97213D61AE600EE8D31 /* iTunesPlugIn.cpp */,
+				01285C0700CC38597F000001 /* iTunesPlugInMac.mm */,
+				01285C0000CC31B17F000001 /* iTunesVisualAPI */,
+			);
+			name = Source;
+			sourceTree = "<group>";
+		};
+		17F536B21FD7CECD0005DF62 /* Serial */ = {
+			isa = PBXGroup;
+			children = (
 				17632EE81C1CDF130044E325 /* ORSSerialBuffer.h */,
 				17632EE91C1CDF130044E325 /* ORSSerialBuffer.m */,
 				17632EEA1C1CDF130044E325 /* ORSSerialPacketDescriptor.h */,
@@ -134,12 +145,17 @@
 				4336E63F1878AA88002C10E6 /* ORSSerialPort.m */,
 				4336E6401878AA88002C10E6 /* ORSSerialPortManager.h */,
 				4336E6411878AA88002C10E6 /* ORSSerialPortManager.m */,
-				DC8CE75913A34EB500963E07 /* iTunesPlugIn.h */,
-				9542E97213D61AE600EE8D31 /* iTunesPlugIn.cpp */,
-				01285C0700CC38597F000001 /* iTunesPlugInMac.mm */,
-				01285C0000CC31B17F000001 /* iTunesVisualAPI */,
 			);
-			name = Source;
+			path = Serial;
+			sourceTree = "<group>";
+		};
+		17F536B31FD7CED90005DF62 /* UDP */ = {
+			isa = PBXGroup;
+			children = (
+				17F536AF1FD7CAE30005DF62 /* GCDAsyncUdpSocket.h */,
+				17F536AE1FD7CAE30005DF62 /* GCDAsyncUdpSocket.m */,
+			);
+			path = UDP;
 			sourceTree = "<group>";
 		};
 		19C28FB6FE9D52B211CA2CBB /* Products */ = {
