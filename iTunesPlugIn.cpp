@@ -329,6 +329,8 @@ static OSStatus VisualPluginHandler(OSType message,VisualPluginMessageInfo *mess
 			RequestArtwork( visualPluginData );
 			
 			InvalidateVisual( visualPluginData );
+            
+            EnableSerialTree(visualPluginData);
 			break;
 		}
 		/*
@@ -369,6 +371,8 @@ static OSStatus VisualPluginHandler(OSType message,VisualPluginMessageInfo *mess
 			ResetRenderData( visualPluginData );
 
 			InvalidateVisual( visualPluginData );
+            
+            DisableSerialTree(visualPluginData);
 			break;
 		}
 		/*

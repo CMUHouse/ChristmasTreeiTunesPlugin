@@ -77,7 +77,7 @@ struct VisualPluginData;
 #import <Cocoa/Cocoa.h>
 
 // "namespace" our ObjC classname to avoid load conflicts between multiple visualizer plugins
-#define VisualView		ComAppleExample_VisualView
+#define VisualView		ChristmasTreeVisualizerView
 #define GLVisualView	ComAppleExample_GLVisualView
 
 @class VisualView;
@@ -96,16 +96,11 @@ struct VisualPluginData
 
 #if TARGET_OS_MAC
 	NSView*				destView;
-	NSRect				destRect;
 	#if USE_SUBVIEW
 	VisualView*			subview;								// custom subview
 	#endif
 	NSImage *			currentArtwork;
 #else
-	HWND				destView;
-	RECT				destRect;
-	Gdiplus::Bitmap* 	currentArtwork;
-	long int			lastDrawTime;
 #endif
 	OptionBits			destOptions;
 
@@ -135,6 +130,8 @@ OSStatus	ActivateVisual( VisualPluginData * visualPluginData, VISUAL_PLATFORM_VI
 OSStatus	MoveVisual( VisualPluginData * visualPluginData, OptionBits newOptions );
 OSStatus	DeactivateVisual( VisualPluginData * visualPluginData );
 OSStatus	ResizeVisual( VisualPluginData * visualPluginData );
+void        DisableSerialTree( VisualPluginData * visualPluginData );
+void        EnableSerialTree( VisualPluginData * visualPluginData );
 
 void		ProcessRenderData( VisualPluginData * visualPluginData, UInt32 timeStampID, const RenderVisualData * renderData );
 void		ResetRenderData( VisualPluginData * visualPluginData );

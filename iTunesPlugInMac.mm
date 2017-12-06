@@ -98,7 +98,11 @@ extern "C" OSStatus iTunesPluginMainMachO( OSType inMessage, PluginMessageInfo *
 - (BOOL)resignFirstResponder;
 -(void)keyDown:(NSEvent *)theEvent;
 
+@property (nonatomic, assign) BOOL bAttemptedSerialInit;
 @property (nonatomic, strong) ORSSerialPort * serialPort;
+
+- (void)cleanupSerialPort;
+- (void)setupSerialPort;
 
 @end
 
@@ -114,7 +118,6 @@ typedef std::array<float, kNumTreeBits> OutputLevels;
 typedef std::bitset<kNumTreeBits> TreeDisplayBits;
 typedef std::deque<OutputLevels> OutputLevelsQueue;
 
-static const bool kEmitSimpleBits = false;
 static const bool kEmitLEDRibbonIntensity = true;
 
 SpectrumData scaleSpectrumData(const SpectrumData& srcData,
@@ -137,7 +140,7 @@ SpectrumData scaleSpectrumData(const SpectrumData& srcData,
         
         CGImageRef img = CGBitmapContextCreateImage(spectrumCtx);
 
-        CGContextSetInterpolationQuality(dstCtx, kCGInterpolationHigh);
+        CGContextSetInterpolationQuality(dstCtx, kCGInterpolationLow);
         CGContextDrawImage(dstCtx, CGRectMake(0, 0, dstLength, 1), img);
         
         UInt8* dstCtxBytes = (UInt8*)CGBitmapContextGetData(dstCtx);
@@ -184,11 +187,36 @@ OutputLevels outputLevelsQueueAverage(const OutputLevelsQueue& queue) {
     return avgLevels;
 }
 
+OutputLevels outputLevelsQueueMax(const OutputLevelsQueue& queue) {
+    
+    OutputLevels maxLevels = {{0,0,0,0}};
+    
+    if (queue.size()) {
+        for (auto lev : queue) {
+            for (int i=0; i<4; i++) {
+                maxLevels[i] = MAX(lev[i], maxLevels[i]);
+            }
+        }
+    }
+    return maxLevels;
+}
+
+static uint8_t GetTreeByte(const TreeDisplayBits& treeBits)
+{
+    uint8_t r = 0;
+    for (int i=0; i<kNumTreeBits; i++) {
+        if (treeBits[i]) {
+            r = r | (1<<i);
+        }
+    }
+    return r;
+}
+
 //-------------------------------------------------------------------------------------------------
 //	DrawVisual
 //-------------------------------------------------------------------------------------------------
 //
-void DrawVisual( VisualPluginData * visualPluginData, ORSSerialPort* serialPort )
+void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serialPort, NSRect viewBounds )
 {
 
     vector<UInt8> leftSpectrumData, rightSpectrumData;
@@ -210,7 +238,6 @@ void DrawVisual( VisualPluginData * visualPluginData, ORSSerialPort* serialPort 
 	// this shouldn't happen but let's be safe
 	if ( visualPluginData->destView == NULL )
 		return;
-
     
     const uint32_t spectSum = accumulate(spectrumData.begin(), spectrumData.end(), 0);
 
@@ -246,21 +273,22 @@ void DrawVisual( VisualPluginData * visualPluginData, ORSSerialPort* serialPort 
     uint32_t specWidth = fivePercentMax - fivePercentMin;
 
     SpectrumData simpleData = scaleSpectrumData(spectrumData, specStart, specWidth, kNumTreeBits);
+    //NSLog(@"DBS: simpleData: %d %d %d %d", simpleData[0], simpleData[1], simpleData[2], simpleData[3]);
     
     SpectrumData smallRibbon = scaleSpectrumData(spectrumData, specStart, specWidth, kNumTreeProgrammableLights/3);
     SpectrumData ribbonData = scaleSpectrumData(smallRibbon, 0, smallRibbon.size(), kNumTreeProgrammableLights);
     
-    NSSize viewSize = [visualPluginData->destView bounds].size;
+    NSSize viewSize = viewBounds.size;
     CGFloat widthStep = viewSize.width / (CGFloat)spectrumData.size();
     CGFloat heightStep = viewSize.height/512;
     CGFloat widthBase = 10;
     CGFloat heightBase = viewSize.height/4;
     
-    if (spectrumData.size()) {
-        CGRect drawRect = [visualPluginData->destView bounds];
+    if (spectrumData.size() ) {
+        CGRect drawRect = viewBounds;
         
         // fill the whole view with black to start
-        [[NSColor blackColor] set];
+        [[NSColor darkGrayColor] set];
         NSRectFill( drawRect );
         
         NSBezierPath* thePath = [NSBezierPath bezierPath];
@@ -340,7 +368,7 @@ void DrawVisual( VisualPluginData * visualPluginData, ORSSerialPort* serialPort 
         {
             where.y += 40;
             
-            [visualPluginData->currentArtwork drawAtPoint:where fromRect:NSZeroRect operation:NSCompositeSourceOver fraction:0.75];
+            [visualPluginData->currentArtwork drawAtPoint:where fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:0.75];
         }
         
         bDrawArtwork = YES;
@@ -351,80 +379,90 @@ void DrawVisual( VisualPluginData * visualPluginData, ORSSerialPort* serialPort 
         outputVals[i] = simpleData[i]/256.f;
     }
     
+    // Compute control bits for simple lights
+    TreeDisplayBits treeBits(0);
     
-    TreeDisplayBits treeBits;
     {
-        static OutputLevelsQueue levelsQueue;
-        static TreeDisplayBits queuedTreeBits;
-        static TreeDisplayBits prevTreeBits;
+        static OutputLevelsQueue recentLevelsQueue;
+        static OutputLevelsQueue currentLevelsQueue;
         static CFTimeInterval prevTime = 0;
+        static std::deque<TreeDisplayBits> prevBits;
+        
+        static OutputLevels lastSetLevels;
+        static OutputLevels lastSetMaxLevels;
+        static TreeDisplayBits lastSetTreeBits;
         
         if (!bPrevDidDrawArtwork && bDrawArtwork) {
-            levelsQueue.clear();
-        }
-        
-        OutputLevels recentAvgLevels = outputLevelsQueueAverage(levelsQueue);
-        for (int i=0; i<kNumTreeBits; i++) {
-            
-            BOOL trigger = outputVals[i] >= recentAvgLevels[i];
-            
-            if (trigger) {
-                treeBits.set(i);
-            }
-            
-            levelsQueue.push_front(outputVals);
-            if (levelsQueue.size() >= kLPFSize) {
-                levelsQueue.pop_back();
-            }
+            recentLevelsQueue.clear();
+            currentLevelsQueue.clear();
+            prevBits.clear();
         }
         
         CFTimeInterval currTime = CACurrentMediaTime();
         CFTimeInterval delta = currTime - prevTime;
         
-        if ((delta * 1000 >= 100))
-        {
-            treeBits = treeBits | queuedTreeBits;
-            prevTreeBits = treeBits;
-            prevTime = currTime;
-            queuedTreeBits.reset();
-        } else {
-            queuedTreeBits = queuedTreeBits | treeBits;
-            treeBits = prevTreeBits;
+        OutputLevels currLevels = outputLevelsQueueMax(currentLevelsQueue);
+        OutputLevels avgRecentLevels = outputLevelsQueueAverage(recentLevelsQueue);
+        OutputLevels maxRecentLevels = outputLevelsQueueMax(recentLevelsQueue);
+        for (int i=0; i<kNumTreeBits; i++) {
+            
+            BOOL bAboveAvg = (currLevels[i] >= avgRecentLevels[i]);
+            BOOL bAbsoluteThreshold = currLevels[i] > 0.25;
+            BOOL bMinThreshold = currLevels[i] > 0.05;
+            //(currLevels[i] >= 0.7 * maxRecentLevels[i]);
+            
+            BOOL trigger = (bAboveAvg && bMinThreshold) || bAbsoluteThreshold;
+            
+            if (trigger) {
+                treeBits.set(i);
+            }
         }
-    }
-    
-    if (0) {
         
-        [[NSColor whiteColor] set];
-        NSRectFill(NSMakeRect(10,500, 160, 100));
-        
-        for(int i=0;i<kNumTreeBits;i++){
+        if ((delta * 1000 >= 200)) {
             
-            BOOL bSet = treeBits[i];
-            CGFloat height = outputVals[i];
+            prevTime = currTime;
             
-            NSColor* color = [NSColor colorWithDeviceRed:(i%3==0) green:(i%3==1) blue:(i%3==2) alpha:1];
-            if (!bSet) {
-                color = [NSColor purpleColor];
+            recentLevelsQueue.push_front(currLevels);
+            if (recentLevelsQueue.size() >= kLPFSize) {
+                recentLevelsQueue.pop_back();
             }
             
-            [color set];
-            NSRectFill(NSMakeRect(10+i*40,500, 40, 100 * height));
+            currentLevelsQueue.clear();
+            currentLevelsQueue.push_back(outputVals);
+            
+            lastSetLevels = currLevels;
+            lastSetTreeBits = treeBits;
+            lastSetMaxLevels = maxRecentLevels;
+            
+        } else {
+            currentLevelsQueue.push_back(outputVals);
         }
-    }
-    
-    if (kEmitSimpleBits && spectSum > 0) {
-
-
         
-        TreeDisplayBits sendBits = treeBits;
-        char bitData = static_cast<char>(sendBits.to_ulong());
-        NSData* data = [NSData dataWithBytes:&bitData length:1];
-        if (serialPort) {
-            [serialPort sendData:data];
+        // Debug Display control levels for simple lights
+        if (1) {
+            
+            [[NSColor whiteColor] set];
+            NSRectFill(NSMakeRect(300,100, 160, 100));
+            
+            for(int i=0;i<kNumTreeBits;i++){
+                
+                BOOL bSet = lastSetTreeBits[i];
+                CGFloat height = lastSetLevels[i];
+                
+                NSColor* color = [NSColor colorWithDeviceRed:(i%3==0) ? 1.0 : 0
+                                                       green:(i%3==1) ? 1.0 : 0
+                                                        blue:(i%3==2) ? 1.0 : 0
+                                                       alpha:1];
+                if (!bSet) {
+                    color = [NSColor purpleColor];
+                }
+                
+                [color set];
+                NSRectFill(NSMakeRect(300+i*40,100, 40, 100 * height));
+            }
         }
+        
     }
-    
     
     if (kEmitLEDRibbonIntensity && spectSum > 0) {
         
@@ -445,7 +483,11 @@ void DrawVisual( VisualPluginData * visualPluginData, ORSSerialPort* serialPort 
         CFTimeInterval currTime = CACurrentMediaTime();
         CFTimeInterval delta = currTime - prevTime;
         
-        if ((delta * 1000) >= 60) {
+        static SpectrumData lastSetRotatedOutput;
+        
+        if ((delta * 1000) >= 50) {
+            
+            prevTime = currTime;
 
             // no intensity can be a full 255 since that byte value is reserved
             SpectrumData outIntensities = ribbonData;
@@ -460,7 +502,7 @@ void DrawVisual( VisualPluginData * visualPluginData, ORSSerialPort* serialPort 
                     for (auto v : heldUpData ) {
                         sum += v[i];
                     }
-                    uint8_t avg = sum / numArr;
+                    uint32_t avg = sum / numArr;
                     outIntensities[i] = avg;
                 }
             }
@@ -495,51 +537,45 @@ void DrawVisual( VisualPluginData * visualPluginData, ORSSerialPort* serialPort 
                 float val = (float)outIntensities[i] / maxVal;
                 val = MIN(1.f, MAX(0.f, val));
                 uint8_t inten = (val * 64) + addIntensity;
-                outIntensities[i] = inten == 255 ? 254 : inten;
+                switch (inten) {
+                    case 255:
+                        inten = 254;
+                        break;
+                    case 0:
+                        inten = 1;
+                        break;
+                    default:
+                        break;
+                }
+                outIntensities[i] = inten;
             }
             
             SpectrumData tmp = outIntensities;
             std::reverse(tmp.begin(),tmp.end());
             
             SpectrumData rotatedOutput;
+#if 1
             rotatedOutput.insert(rotatedOutput.end(), tmp.begin(), tmp.end());
             tmp = outIntensities;
             rotatedOutput.insert(rotatedOutput.end(), tmp.begin(), tmp.end());
-            
-            if (1) {
-                
-                NSBezierPath* thePath = [NSBezierPath bezierPath];
-                widthStep = viewSize.width / (CGFloat)rotatedOutput.size();
-                heightStep = viewSize.height/256;
-                NSPoint pt = NSMakePoint(widthBase,
-                                         heightBase + (rotatedOutput[0] * heightStep));
-                [thePath moveToPoint:pt];
-                for (int i=0; i<rotatedOutput.size(); i++) {
-                    pt = NSMakePoint(widthBase + i*widthStep,
-                                     heightBase + (rotatedOutput[i] * heightStep));
-                    [thePath lineToPoint:pt];
-                }
-                [[NSColor purpleColor] set];
-                [thePath setLineWidth:3];
-                [thePath stroke];
-                
-                /*
-                 [[NSColor whiteColor] set];
-                 NSRectFill(NSMakeRect(10,500, 160, 100));
-                 {
-                    CGFloat height = avgIntensity;
-                    NSColor* color = [NSColor purpleColor];
-                    [color set];
-                    NSRectFill(NSMakeRect(10,500, 40, 100 * height));
-                 }
-                 */
+#else
+            for (int i=0; i<150; i++) {
+                rotatedOutput.push_back(0x1);
             }
+#endif
+            lastSetRotatedOutput = rotatedOutput;
             
             // add the bits to control the basic lights
-            rotatedOutput.push_back((UInt8)treeBits.to_ulong());
+            uint8_t treeByte = GetTreeByte(treeBits);
+            //NSLog(@"DBS: spew: TreeByte %x", treeByte);
+            rotatedOutput.push_back(treeByte);
 
             // add a footer of 255 to say we are done with this command
             rotatedOutput.push_back(255);
+            
+            if (serialPort) {
+                //NSLog(@"DBS: spew: Pushing %ld bytes to serial %@\n", rotatedOutput.size(), serialPort);
+            }
             
             NSData* data = [NSData dataWithBytes:rotatedOutput.data() length:rotatedOutput.size() * sizeof(uint8_t)];
             if (serialPort) {
@@ -551,6 +587,26 @@ void DrawVisual( VisualPluginData * visualPluginData, ORSSerialPort* serialPort 
         } else {
             heldUpData.push_back(ribbonData);
         }
+        
+        /*
+        if (1) {
+            
+            NSBezierPath* thePath = [NSBezierPath bezierPath];
+            widthStep = viewSize.width / (CGFloat)lastSetRotatedOutput.size();
+            heightStep = viewSize.height/256;
+            NSPoint pt = NSMakePoint(widthBase,
+                                     heightBase + (lastSetRotatedOutput[0] * heightStep));
+            [thePath moveToPoint:pt];
+            for (int i=0; i<lastSetRotatedOutput.size(); i++) {
+                pt = NSMakePoint(widthBase + i*widthStep,
+                                 heightBase + (lastSetRotatedOutput[i] * heightStep));
+                [thePath lineToPoint:pt];
+            }
+            [[NSColor purpleColor] set];
+            [thePath setLineWidth:3];
+            [thePath stroke];
+            
+        }*/
         
     }
 	
@@ -599,23 +655,21 @@ void InvalidateVisual( VisualPluginData * visualPluginData )
 OSStatus ActivateVisual( VisualPluginData * visualPluginData, VISUAL_PLATFORM_VIEW destView, OptionBits options )
 {
 	OSStatus			status = noErr;
+    NSRect destBounds = destView.bounds;
 
 	visualPluginData->destView			= destView;
-	visualPluginData->destRect			= [destView bounds];
-	visualPluginData->destOptions		= options;
+    visualPluginData->destOptions		= options;
 
 	UpdateInfoTimeOut( visualPluginData );
 
 #if USE_SUBVIEW
 
 	// NSView-based subview
-	visualPluginData->subview = [[VisualView alloc] initWithFrame:visualPluginData->destRect];
-	if ( visualPluginData->subview != NULL )
+    VisualView* subview = [[VisualView alloc] initWithFrame:destBounds];
+    visualPluginData->subview = subview;
+	if ( subview != NULL )
 	{
-		[visualPluginData->subview setAutoresizingMask: (NSViewWidthSizable | NSViewHeightSizable)];
-
 		[visualPluginData->subview setVisualPluginData:visualPluginData];
-
 		[destView addSubview:visualPluginData->subview];
 	}
 	else
@@ -634,10 +688,8 @@ OSStatus ActivateVisual( VisualPluginData * visualPluginData, VISUAL_PLATFORM_VI
 //
 OSStatus MoveVisual( VisualPluginData * visualPluginData, OptionBits newOptions )
 {
-	visualPluginData->destRect	  = [visualPluginData->destView bounds];
 	visualPluginData->destOptions = newOptions;
-
-	return noErr;
+    return noErr;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -647,13 +699,18 @@ OSStatus MoveVisual( VisualPluginData * visualPluginData, OptionBits newOptions 
 OSStatus DeactivateVisual( VisualPluginData * visualPluginData )
 {
 #if USE_SUBVIEW
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    [nc removeObserver:visualPluginData->subview];
+    [visualPluginData->subview cleanupSerialPort];
+
+    
 	[visualPluginData->subview removeFromSuperview];
 	visualPluginData->subview = NULL;
 	visualPluginData->currentArtwork = NULL;
 #endif
+    
 
 	visualPluginData->destView			= NULL;
-	visualPluginData->destRect			= CGRectNull;
 	visualPluginData->drawInfoTimeOut	= 0;
 	
 	return noErr;
@@ -665,11 +722,23 @@ OSStatus DeactivateVisual( VisualPluginData * visualPluginData )
 //
 OSStatus ResizeVisual( VisualPluginData * visualPluginData )
 {
-	visualPluginData->destRect = [visualPluginData->destView bounds];
+    NSView* destView = visualPluginData->destView;
+    NSRect destBounds = destView.bounds;
+    VisualView* subview = visualPluginData->subview;
+    subview.frame = destBounds;
+    return noErr;
+}
 
-	// note: the subview is automatically resized by iTunes so nothing to do here
+void        EnableSerialTree( VisualPluginData * visualPluginData )
+{
+        VisualView* subview = visualPluginData->subview;
+        [subview setupSerialPort];
+}
 
-	return noErr;
+void        DisableSerialTree( VisualPluginData * visualPluginData )
+{
+    VisualView* subview = visualPluginData->subview;
+    [subview cleanupSerialPort];
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -696,8 +765,18 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
 
 @synthesize visualPluginData = _visualPluginData;
 
+- (instancetype)initWithFrame:(NSRect)frameRect
+{
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        [self setupSerialPort];
+    }
+    return self;
+}
+
 - (void)dealloc
 {
+    [self cleanupSerialPort];
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
     [nc removeObserver:self];
 }
@@ -720,7 +799,7 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
 {
 	if ( _visualPluginData != NULL )
 	{
-        DrawVisual( _visualPluginData , self.serialPort);
+        DrawVisualView_( _visualPluginData , self.serialPort, self.bounds);
 	}
 }
 
@@ -733,9 +812,10 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
 	return YES;
 }
 
-- (void)cleanupSerial
+- (void)cleanupSerialPort
 {
     if (self.serialPort) {
+        NSLog(@"DBS: cleaning up serial connection");
         [self.serialPort close];
         self.serialPort.delegate = nil;
         self.serialPort = nil;
@@ -744,6 +824,8 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
 
 - (void)setupSerialPort
 {
+    self.bAttemptedSerialInit = YES;
+    
     static ORSSerialPortManager* sSerialMgr = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -754,6 +836,7 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
         
         NSArray* availablePorts = [[ORSSerialPortManager sharedSerialPortManager] availablePorts];
         ORSSerialPort* foundPort = nil;
+        NSLog(@"DBS: avaialble serial ports %@", availablePorts);
         for (ORSSerialPort* port in availablePorts) {
             
             NSString* path = port.path;
@@ -770,7 +853,7 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
         
         if (foundPort) {
             
-            NSLog(@"Christmas Tree Visualizer: found serial port name %@, path %@", foundPort.name, foundPort.path);
+            NSLog(@"DBS: Christmas Tree Visualizer: found serial port name %@, path %@", foundPort.name, foundPort.path);
             self.serialPort = foundPort;
             if (self.serialPort) {
                 self.serialPort.delegate = self;
@@ -778,9 +861,14 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
                 [self.serialPort open];
             }
         } else {
-            NSLog(@"Could not find valid Serial port\n");
+            NSLog(@"DBS: Could not find valid Serial port\n");
         }
+        
+        NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+        [nc addObserver:self selector:@selector(serialPortsWereConnected:) name:ORSSerialPortsWereConnectedNotification object:nil];
+
     }
+    
 }
 
 - (void)serialPortsWereConnected:(NSNotificationCenter*)notification
@@ -794,11 +882,6 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
 //
 - (BOOL)becomeFirstResponder
 {
-    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
-    [nc addObserver:self selector:@selector(serialPortsWereConnected:) name:ORSSerialPortsWereConnectedNotification object:nil];
-    
-    [self setupSerialPort];
-    
     return YES;
 }
 
@@ -808,11 +891,6 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
 //
 - (BOOL)resignFirstResponder
 {
-   [self cleanupSerial];
-
-    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
-    [nc removeObserver:self];
-
 	return YES;
 }
 
@@ -845,7 +923,7 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
 
 - (void)serialPortWasRemovedFromSystem:(ORSSerialPort *)serialPort
 {
-    [self cleanupSerial];
+    [self cleanupSerialPort];
 }
 
 
