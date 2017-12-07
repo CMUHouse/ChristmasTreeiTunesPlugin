@@ -130,8 +130,10 @@ OSStatus	ActivateVisual( VisualPluginData * visualPluginData, VISUAL_PLATFORM_VI
 OSStatus	MoveVisual( VisualPluginData * visualPluginData, OptionBits newOptions );
 OSStatus	DeactivateVisual( VisualPluginData * visualPluginData );
 OSStatus	ResizeVisual( VisualPluginData * visualPluginData );
+
 void        DisableSerialTree( VisualPluginData * visualPluginData );
 void        EnableSerialTree( VisualPluginData * visualPluginData );
+void        ResetSerialTree( VisualPluginData * visualPluginData );
 
 void		ProcessRenderData( VisualPluginData * visualPluginData, UInt32 timeStampID, const RenderVisualData * renderData );
 void		ResetRenderData( VisualPluginData * visualPluginData );

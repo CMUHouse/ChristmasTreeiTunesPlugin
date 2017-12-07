@@ -264,6 +264,8 @@ static OSStatus VisualPluginHandler(OSType message,VisualPluginMessageInfo *mess
 		{
 			UpdateTrackInfo( visualPluginData, NULL, NULL );
 
+            DisableSerialTree( visualPluginData );
+            
 			status = DeactivateVisual( visualPluginData );
 			break;
 		}
@@ -344,6 +346,8 @@ static OSStatus VisualPluginHandler(OSType message,VisualPluginMessageInfo *mess
 			RequestArtwork( visualPluginData );
 				
 			InvalidateVisual( visualPluginData );
+            
+            ResetSerialTree( visualPluginData );
 			break;
 		}
 		/*
@@ -372,7 +376,7 @@ static OSStatus VisualPluginHandler(OSType message,VisualPluginMessageInfo *mess
 
 			InvalidateVisual( visualPluginData );
             
-            DisableSerialTree(visualPluginData);
+            ResetSerialTree( visualPluginData );
 			break;
 		}
 		/*

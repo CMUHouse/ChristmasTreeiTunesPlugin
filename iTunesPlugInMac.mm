@@ -66,6 +66,8 @@
 #include <deque>
 #include <bitset>
 
+#define FORCE_LIGHTS_OFF 0
+
 using namespace std;
 
 //-------------------------------------------------------------------------------------------------
@@ -108,7 +110,7 @@ extern "C" OSStatus iTunesPluginMainMachO( OSType inMessage, PluginMessageInfo *
 
 #endif	// USE_SUBVIEW
 
-static const size_t kNumTreeBits = 4;
+static const size_t kNumTreeBits = 3;
 static const size_t kNumTreeProgrammableLights = 75;
 static const size_t kLPFSize = 10;
 
@@ -172,11 +174,14 @@ SpectrumData scaleSpectrumData(const SpectrumData& srcData,
 
 OutputLevels outputLevelsQueueAverage(const OutputLevelsQueue& queue) {
     
-    OutputLevels avgLevels = {{0,0,0,0}};
+    OutputLevels avgLevels;
+    for (int i=0; i<kNumTreeBits; i++) {
+        avgLevels[i]=0;
+    }
     
     if (queue.size()) {
         for (auto lev : queue) {
-            for (int i=0; i<4; i++) {
+            for (int i=0; i<kNumTreeBits; i++) {
                 avgLevels[i] += lev[i];
             }
         }
@@ -189,11 +194,14 @@ OutputLevels outputLevelsQueueAverage(const OutputLevelsQueue& queue) {
 
 OutputLevels outputLevelsQueueMax(const OutputLevelsQueue& queue) {
     
-    OutputLevels maxLevels = {{0,0,0,0}};
+    OutputLevels maxLevels;
+    for (int i=0; i<kNumTreeBits; i++) {
+        maxLevels[i]=0;
+    }
     
     if (queue.size()) {
         for (auto lev : queue) {
-            for (int i=0; i<4; i++) {
+            for (int i=0; i<kNumTreeBits; i++) {
                 maxLevels[i] = MAX(lev[i], maxLevels[i]);
             }
         }
@@ -206,7 +214,7 @@ static uint8_t GetTreeByte(const TreeDisplayBits& treeBits)
     uint8_t r = 0;
     for (int i=0; i<kNumTreeBits; i++) {
         if (treeBits[i]) {
-            r = r | (1<<i);
+            r = r | (1<<(i+1));
         }
     }
     return r;
@@ -380,22 +388,31 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
     }
     
     // Compute control bits for simple lights
-    TreeDisplayBits treeBits(0);
-    
+    TreeDisplayBits dispTreeBits(0);
+    bool dispBeatDetected = false;
     {
+        TreeDisplayBits treeBits(0);
+        bool beatDetected = false;
+        
         static OutputLevelsQueue recentLevelsQueue;
         static OutputLevelsQueue currentLevelsQueue;
         static CFTimeInterval prevTime = 0;
         static std::deque<TreeDisplayBits> prevBits;
         
+        static std::deque<uint32_t> recentSpectrumSumQueue(1, 0);
+        static std::deque<uint32_t> currentSpectrumSumQueue(1, 0);
+        
         static OutputLevels lastSetLevels;
         static OutputLevels lastSetMaxLevels;
         static TreeDisplayBits lastSetTreeBits;
+        static bool lastSetBeatDetected;
         
         if (!bPrevDidDrawArtwork && bDrawArtwork) {
             recentLevelsQueue.clear();
             currentLevelsQueue.clear();
             prevBits.clear();
+            recentSpectrumSumQueue.clear();
+            currentSpectrumSumQueue.clear();
         }
         
         CFTimeInterval currTime = CACurrentMediaTime();
@@ -404,21 +421,46 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
         OutputLevels currLevels = outputLevelsQueueMax(currentLevelsQueue);
         OutputLevels avgRecentLevels = outputLevelsQueueAverage(recentLevelsQueue);
         OutputLevels maxRecentLevels = outputLevelsQueueMax(recentLevelsQueue);
+        
         for (int i=0; i<kNumTreeBits; i++) {
-            
             BOOL bAboveAvg = (currLevels[i] >= avgRecentLevels[i]);
-            BOOL bAbsoluteThreshold = currLevels[i] > 0.25;
+            //BOOL bAbsoluteThreshold = currLevels[i] > 0.25;
             BOOL bMinThreshold = currLevels[i] > 0.05;
-            //(currLevels[i] >= 0.7 * maxRecentLevels[i]);
             
-            BOOL trigger = (bAboveAvg && bMinThreshold) || bAbsoluteThreshold;
-            
+            BOOL trigger = (bAboveAvg && bMinThreshold);// || bAbsoluteThreshold;
             if (trigger) {
                 treeBits.set(i);
             }
         }
         
-        if ((delta * 1000 >= 200)) {
+        uint32_t currSpectSum = spectSum;
+        if (!recentSpectrumSumQueue.empty() && !currentSpectrumSumQueue.empty())
+        {
+            uint32_t maxSpectSum = *(std::max_element(recentSpectrumSumQueue.begin(), recentSpectrumSumQueue.end()));
+            uint32_t minSpectSum = *(std::min_element(recentSpectrumSumQueue.begin(), recentSpectrumSumQueue.end()));
+            uint32_t avgSpectSum = std::accumulate(recentSpectrumSumQueue.begin(), recentSpectrumSumQueue.end(), 0) / recentSpectrumSumQueue.size();
+            
+            currSpectSum = *(std::max_element(currentSpectrumSumQueue.begin(), currentSpectrumSumQueue.end()));
+            
+            
+            double range = maxSpectSum - minSpectSum;
+            double spectOffset = currSpectSum - minSpectSum;
+            BOOL bThreshold = spectOffset > 0.6 * range;
+            BOOL bAboveAvg = currSpectSum >= avgSpectSum;
+            beatDetected = bAboveAvg && bThreshold;
+
+            if (beatDetected) {
+                treeBits.set();
+            }
+            
+        }
+        
+#if FORCE_LIGHTS_OFF
+        treeBits.set();
+        beatDetected = true;
+#endif
+        
+        if ((delta * 1000 >= 150)) {
             
             prevTime = currTime;
             
@@ -427,22 +469,36 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
                 recentLevelsQueue.pop_back();
             }
             
+            recentSpectrumSumQueue.push_front(currSpectSum);
+            if (recentSpectrumSumQueue.size() >= 20) {
+                recentSpectrumSumQueue.pop_back();
+            }
+            
             currentLevelsQueue.clear();
-            currentLevelsQueue.push_back(outputVals);
+            currentSpectrumSumQueue.clear();
             
             lastSetLevels = currLevels;
             lastSetTreeBits = treeBits;
             lastSetMaxLevels = maxRecentLevels;
-            
-        } else {
-            currentLevelsQueue.push_back(outputVals);
+            lastSetBeatDetected = beatDetected;
         }
+        
+        currentLevelsQueue.push_back(outputVals);
+        currentSpectrumSumQueue.push_back(spectSum);
+        
+        dispBeatDetected = lastSetBeatDetected;
+        dispTreeBits = lastSetTreeBits;
         
         // Debug Display control levels for simple lights
         if (1) {
             
             [[NSColor whiteColor] set];
             NSRectFill(NSMakeRect(300,100, 160, 100));
+            
+            if (lastSetBeatDetected) {
+                [[NSColor orangeColor] set];
+                NSRectFill(NSMakeRect(300, 50, 40, 40));
+            }
             
             for(int i=0;i<kNumTreeBits;i++){
                 
@@ -459,7 +515,13 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
                 
                 [color set];
                 NSRectFill(NSMakeRect(300+i*40,100, 40, 100 * height));
+                
+                if (bSet) {
+                    NSRectFill(NSMakeRect(300+((i+1)*40),50, 40, 40));
+                }
             }
+            
+
         }
         
     }
@@ -535,6 +597,11 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
                 maxVal = MAX(maxVal, 16);
                 
                 float val = (float)outIntensities[i] / maxVal;
+                
+                if (dispBeatDetected) {
+                    val = val * 2;
+                }
+                
                 val = MIN(1.f, MAX(0.f, val));
                 uint8_t inten = (val * 64) + addIntensity;
                 switch (inten) {
@@ -547,6 +614,7 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
                     default:
                         break;
                 }
+                
                 outIntensities[i] = inten;
             }
             
@@ -554,27 +622,31 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
             std::reverse(tmp.begin(),tmp.end());
             
             SpectrumData rotatedOutput;
-#if 1
+#if FORCE_LIGHTS_OFF
+            for (int i=0; i<150; i++) {
+                rotatedOutput.push_back(1);
+            }
+#else
             rotatedOutput.insert(rotatedOutput.end(), tmp.begin(), tmp.end());
             tmp = outIntensities;
             rotatedOutput.insert(rotatedOutput.end(), tmp.begin(), tmp.end());
-#else
-            for (int i=0; i<150; i++) {
-                rotatedOutput.push_back(0x1);
-            }
 #endif
             lastSetRotatedOutput = rotatedOutput;
             
             // add the bits to control the basic lights
-            uint8_t treeByte = GetTreeByte(treeBits);
-            //NSLog(@"DBS: spew: TreeByte %x", treeByte);
+            uint8_t treeByte = GetTreeByte(dispTreeBits);
+            
+            if (dispBeatDetected) {
+                treeByte = treeByte | 0x1;
+            }
             rotatedOutput.push_back(treeByte);
 
             // add a footer of 255 to say we are done with this command
             rotatedOutput.push_back(255);
             
             if (serialPort) {
-                //NSLog(@"DBS: spew: Pushing %ld bytes to serial %@\n", rotatedOutput.size(), serialPort);
+//                NSLog(@"DBS: spew: TreeByte %x", treeByte);
+//                NSLog(@"DBS: spew: Pushing %ld bytes to serial %@\n", rotatedOutput.size(), serialPort);
             }
             
             NSData* data = [NSData dataWithBytes:rotatedOutput.data() length:rotatedOutput.size() * sizeof(uint8_t)];
@@ -611,6 +683,29 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
     }
 	
     bPrevDidDrawArtwork = bDrawArtwork;
+
+}
+
+void ResetSerialTree( VisualPluginData * visualPluginData )
+{
+    VisualView* subview = visualPluginData->subview;
+    ORSSerialPort* serialPort = subview.serialPort;
+    
+    if (serialPort) {
+        
+        std::array<uint8_t, 152> msg;
+        
+        for (int i=0; i<150; i++) {
+            msg[i] = 128;
+        }
+        msg[150] = 0xf;
+        msg[151] = 0xff;
+        
+        NSData* data = [NSData dataWithBytes:msg.data() length:msg.size() * sizeof(uint8_t)];
+        NSLog(@"DBS: Reseting tree lights to all on");
+        [serialPort sendData:data];
+    }
+    
 
 }
 
@@ -664,6 +759,9 @@ OSStatus ActivateVisual( VisualPluginData * visualPluginData, VISUAL_PLATFORM_VI
 
 #if USE_SUBVIEW
 
+    destView.autoresizingMask = NSViewHeightSizable | NSViewWidthSizable |
+    NSViewMinXMargin | NSViewMinYMargin | NSViewMaxXMargin | NSViewMaxYMargin;
+    
 	// NSView-based subview
     VisualView* subview = [[VisualView alloc] initWithFrame:destBounds];
     visualPluginData->subview = subview;
@@ -737,6 +835,7 @@ void        EnableSerialTree( VisualPluginData * visualPluginData )
 
 void        DisableSerialTree( VisualPluginData * visualPluginData )
 {
+    ResetSerialTree(visualPluginData);
     VisualView* subview = visualPluginData->subview;
     [subview cleanupSerialPort];
 }
