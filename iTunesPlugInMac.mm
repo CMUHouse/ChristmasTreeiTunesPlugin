@@ -58,6 +58,7 @@
 #include <stdio.h>
 #import "ORSSerialPort.h"
 #import "ORSSerialPortManager.h"
+#import "GCDAsyncUdpSocket.h"
 
 #include <vector>
 #include <algorithm>
@@ -87,7 +88,7 @@ extern "C" OSStatus iTunesPluginMainMachO( OSType inMessage, PluginMessageInfo *
 //	VisualView
 //-------------------------------------------------------------------------------------------------
 
-@interface VisualView : NSView <ORSSerialPortDelegate>
+@interface VisualView : NSView <ORSSerialPortDelegate, GCDAsyncUdpSocketDelegate>
 {
 	VisualPluginData *	_visualPluginData;
 }
@@ -102,6 +103,9 @@ extern "C" OSStatus iTunesPluginMainMachO( OSType inMessage, PluginMessageInfo *
 
 @property (nonatomic, assign) BOOL bAttemptedSerialInit;
 @property (nonatomic, strong) ORSSerialPort * serialPort;
+
+@property (strong, nonatomic) dispatch_queue_t socket_queue;
+@property (strong, nonatomic) GCDAsyncUdpSocket* udp_socket;
 
 - (void)cleanupSerialPort;
 - (void)setupSerialPort;
@@ -281,8 +285,7 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
     uint32_t specWidth = fivePercentMax - fivePercentMin;
 
     SpectrumData simpleData = scaleSpectrumData(spectrumData, specStart, specWidth, kNumTreeBits);
-    //NSLog(@"DBS: simpleData: %d %d %d %d", simpleData[0], simpleData[1], simpleData[2], simpleData[3]);
-    
+
     SpectrumData smallRibbon = scaleSpectrumData(spectrumData, specStart, specWidth, kNumTreeProgrammableLights/3);
     SpectrumData ribbonData = scaleSpectrumData(smallRibbon, 0, smallRibbon.size(), kNumTreeProgrammableLights);
     
@@ -390,6 +393,7 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
     // Compute control bits for simple lights
     TreeDisplayBits dispTreeBits(0);
     bool dispBeatDetected = false;
+    bool bSimpleLightsWantSend = false;
     {
         TreeDisplayBits treeBits(0);
         bool beatDetected = false;
@@ -455,11 +459,6 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
             
         }
         
-#if FORCE_LIGHTS_OFF
-        treeBits.set();
-        beatDetected = true;
-#endif
-        
         if ((delta * 1000 >= 150)) {
             
             prevTime = currTime;
@@ -481,6 +480,8 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
             lastSetTreeBits = treeBits;
             lastSetMaxLevels = maxRecentLevels;
             lastSetBeatDetected = beatDetected;
+            
+            bSimpleLightsWantSend = true;
         }
         
         currentLevelsQueue.push_back(outputVals);
@@ -547,7 +548,7 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
         
         static SpectrumData lastSetRotatedOutput;
         
-        if ((delta * 1000) >= 50) {
+        if ((delta * 1000) >= 50 || bSimpleLightsWantSend) {
             
             prevTime = currTime;
 
@@ -604,49 +605,41 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
                 
                 val = MIN(1.f, MAX(0.f, val));
                 uint8_t inten = (val * 64) + addIntensity;
-                switch (inten) {
-                    case 255:
-                        inten = 254;
-                        break;
-                    case 0:
-                        inten = 1;
-                        break;
-                    default:
-                        break;
+                if (inten == 0xDB) {
+                    inten = 0xDA;
                 }
-                
                 outIntensities[i] = inten;
             }
             
             SpectrumData tmp = outIntensities;
             std::reverse(tmp.begin(),tmp.end());
             
+            // add the bits to control the basic lights
+            uint8_t treeByte = GetTreeByte(dispTreeBits);
+            if (dispBeatDetected) {
+                treeByte = treeByte | 0x1;
+            }
+            
             SpectrumData rotatedOutput;
 #if FORCE_LIGHTS_OFF
             for (int i=0; i<150; i++) {
-                rotatedOutput.push_back(1);
+                rotatedOutput.push_back(0xAA);
             }
+            treeByte = 0xf;
 #else
+            NSLog(@"DBS: pushing intensities");
             rotatedOutput.insert(rotatedOutput.end(), tmp.begin(), tmp.end());
             tmp = outIntensities;
             rotatedOutput.insert(rotatedOutput.end(), tmp.begin(), tmp.end());
 #endif
             lastSetRotatedOutput = rotatedOutput;
-            
-            // add the bits to control the basic lights
-            uint8_t treeByte = GetTreeByte(dispTreeBits);
-            
-            if (dispBeatDetected) {
-                treeByte = treeByte | 0x1;
-            }
             rotatedOutput.push_back(treeByte);
-
-            // add a footer of 255 to say we are done with this command
-            rotatedOutput.push_back(255);
+            // add a footer of 0xDB to say we are done with this command
+            rotatedOutput.push_back(0xDB);
             
             if (serialPort) {
-//                NSLog(@"DBS: spew: TreeByte %x", treeByte);
-//                NSLog(@"DBS: spew: Pushing %ld bytes to serial %@\n", rotatedOutput.size(), serialPort);
+                //NSLog(@"DBS: spew: TreeByte %x", treeByte);
+                //NSLog(@"DBS: spew: Pushing %ld bytes to serial %@\n", rotatedOutput.size(), serialPort);
             }
             
             NSData* data = [NSData dataWithBytes:rotatedOutput.data() length:rotatedOutput.size() * sizeof(uint8_t)];
@@ -654,13 +647,34 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
                 [serialPort sendData:data];
             }
             
+            
+#if 0
+            GCDAsyncUdpSocket* socket = visualPluginData->subview.udp_socket;
+            if (socket && smallRibbon.size() == 25)
+            {
+             
+                std::vector<uint8_t> msg;
+                for (int i=0; i<25; i++) {
+                    uint8_t a = smallRibbon[i] / 2;
+                    if (dispBeatDetected) {
+                        a *= 2;
+                    }
+                    msg.push_back(a);
+                    msg.push_back(a);
+                    msg.push_back(a);
+                }
+                NSData* data = [NSData dataWithBytes:msg.data() length:msg.size() * sizeof(uint8_t)];
+                [socket sendData:data toHost:@"10.0.1.150" port:2390 withTimeout:1.0 tag:0xDEADBEEF];
+            }
+#endif
+            
             heldUpData.clear();
             
         } else {
             heldUpData.push_back(ribbonData);
         }
         
-        /*
+        
         if (1) {
             
             NSBezierPath* thePath = [NSBezierPath bezierPath];
@@ -678,7 +692,7 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
             [thePath setLineWidth:3];
             [thePath stroke];
             
-        }*/
+        }
         
     }
 	
@@ -699,7 +713,7 @@ void ResetSerialTree( VisualPluginData * visualPluginData )
             msg[i] = 128;
         }
         msg[150] = 0xf;
-        msg[151] = 0xff;
+        msg[151] = 0xDB;
         
         NSData* data = [NSData dataWithBytes:msg.data() length:msg.size() * sizeof(uint8_t)];
         NSLog(@"DBS: Reseting tree lights to all on");
@@ -968,6 +982,9 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
 
     }
     
+    self.socket_queue = dispatch_queue_create("socket queue",0);
+    self.udp_socket = [[GCDAsyncUdpSocket alloc] initWithDelegate:self delegateQueue:self.socket_queue];
+    
 }
 
 - (void)serialPortsWereConnected:(NSNotificationCenter*)notification
@@ -1017,7 +1034,12 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
 
 - (void)serialPort:(ORSSerialPort *)serialPort didReceiveData:(NSData *)data
 {
-    
+    if (data.length >= 1) {
+        const uint8_t* bytes = (const uint8_t*)data.bytes;
+        if (bytes[0] == 0xee || bytes[1] == 0xee) {
+            NSLog(@"DBS: Error Received Data (%ld) %x %x", data.length, bytes[0], bytes[1]);
+        }
+    }
 }
 
 - (void)serialPortWasRemovedFromSystem:(ORSSerialPort *)serialPort
