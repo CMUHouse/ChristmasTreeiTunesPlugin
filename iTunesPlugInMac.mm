@@ -83,7 +83,82 @@ using namespace std;
 
 extern "C" OSStatus iTunesPluginMainMachO( OSType inMessage, PluginMessageInfo *inMessageInfoPtr, void *refCon ) __attribute__((visibility("default")));
 
+static const size_t kNumTreeBits = 3;
+static const size_t kRibbonSize = 75;
+static const size_t kSmallRibbonSize = 25;
+static const size_t kNumBallLights = 25;
+static const size_t kLPFSize = 10;
+
+static const CFTimeInterval kBallLightAnimationDuration = 4.0;
+
 #if USE_SUBVIEW
+
+static NSColor* randomBallColor();
+
+struct RGB {
+    uint8_t r = 0;
+    uint8_t g = 0;
+    uint8_t b = 0;
+    
+    RGB() {}
+    
+    RGB(NSColor* col) {
+        r = col.redComponent * 255.0;
+        g = col.greenComponent * 255.0;
+        b = col.blueComponent * 255.0;
+    }
+};
+
+struct BallLight {
+    
+    NSColor* startColor = [NSColor whiteColor];
+    NSColor* endColor = [NSColor whiteColor];
+    
+    CFAbsoluteTime animStart = 0;
+    CFAbsoluteTime animEnd = 0;
+    
+    NSColor* currColor = nil;
+    
+    void updateForTime(CFAbsoluteTime t) {
+        
+        if (!startColor || !endColor) {
+            return;
+        }
+        
+        if (animStart == 0 || animEnd == 0 || animStart >= animEnd) {
+            animStart = t;
+            animEnd = t + kBallLightAnimationDuration;
+        }
+        
+        if (t <= animStart) {
+            
+            animStart = t;
+            animEnd = t + kBallLightAnimationDuration;
+            currColor = startColor;
+            
+        } else if (t >= animEnd) {
+            
+            currColor = endColor;
+            
+            startColor = endColor;
+            while (startColor == endColor) {
+                endColor = randomBallColor();
+            }
+            animStart = t;
+            animEnd = t + kBallLightAnimationDuration;
+            
+        } else {
+            
+            CGFloat inter = (t - animStart) / (animEnd - animStart);
+            NSColor* interCol = [startColor blendedColorWithFraction:inter ofColor:endColor];
+            currColor = interCol;
+        }
+    }
+    
+    
+    
+};
+
 //-------------------------------------------------------------------------------------------------
 //	VisualView
 //-------------------------------------------------------------------------------------------------
@@ -101,6 +176,8 @@ extern "C" OSStatus iTunesPluginMainMachO( OSType inMessage, PluginMessageInfo *
 - (BOOL)resignFirstResponder;
 -(void)keyDown:(NSEvent *)theEvent;
 
+@property (nonatomic, assign) std::vector<BallLight> ballLights;
+
 @property (nonatomic, assign) BOOL bAttemptedSerialInit;
 @property (nonatomic, strong) ORSSerialPort * serialPort;
 
@@ -110,13 +187,12 @@ extern "C" OSStatus iTunesPluginMainMachO( OSType inMessage, PluginMessageInfo *
 - (void)cleanupSerialPort;
 - (void)setupSerialPort;
 
+- (std::vector<NSColor*>)updateBallLights:(CFAbsoluteTime)t;
+
 @end
 
 #endif	// USE_SUBVIEW
 
-static const size_t kNumTreeBits = 3;
-static const size_t kNumTreeProgrammableLights = 75;
-static const size_t kLPFSize = 10;
 
 
 typedef std::vector<UInt8> SpectrumData;
@@ -125,6 +201,34 @@ typedef std::bitset<kNumTreeBits> TreeDisplayBits;
 typedef std::deque<OutputLevels> OutputLevelsQueue;
 
 static const bool kEmitLEDRibbonIntensity = true;
+
+
+
+static const std::vector<NSColor*>& getDefaultBallColors()
+{
+    static std::vector<NSColor*> cols;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        cols.push_back([[NSColor redColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
+        cols.push_back([[NSColor orangeColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
+        cols.push_back([[NSColor yellowColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
+        cols.push_back([[NSColor greenColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
+        cols.push_back([[NSColor blueColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
+        //cols.push_back([[NSColor purpleColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
+        cols.push_back([[NSColor whiteColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
+        //cols.push_back([[NSColor cyanColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
+        cols.push_back([[NSColor magentaColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
+    });
+    return cols;
+}
+
+static NSColor* randomBallColor()
+{
+    const auto& colors = getDefaultBallColors();
+    uint32_t numCols = colors.size();
+    uint32_t idx = arc4random_uniform(numCols);
+    return colors[idx];
+}
 
 SpectrumData scaleSpectrumData(const SpectrumData& srcData,
                                size_t srcStart, size_t srcLength,
@@ -213,6 +317,42 @@ OutputLevels outputLevelsQueueMax(const OutputLevelsQueue& queue) {
     return maxLevels;
 }
 
+static SpectrumData averageSpectrum(const std::deque<SpectrumData>& queue)
+{
+    size_t num = queue.front().size();
+    SpectrumData res(num, 0);
+    for (const auto& vals : queue) {
+        for (int i=0; i<res.size(); i++) {
+            res[i] += vals[i];
+        }
+    }
+    return res;
+}
+
+static SpectrumData maxSpectrum(const std::deque<SpectrumData>& queue)
+{
+    size_t num = queue.front().size();
+    SpectrumData res(num, 0);
+    for (const auto& vals : queue) {
+        for (int i=0; i<res.size(); i++) {
+            res[i] = MAX(vals[i], res[i]);
+        }
+    }
+    return res;
+}
+
+static SpectrumData minSpectrum(const std::deque<SpectrumData>& queue)
+{
+    size_t num = queue.front().size();
+    SpectrumData res(num, 0);
+    for (const auto& vals : queue) {
+        for (int i=0; i<res.size(); i++) {
+            res[i] = MIN(vals[i], res[i]);
+        }
+    }
+    return res;
+}
+
 static uint8_t GetTreeByte(const TreeDisplayBits& treeBits)
 {
     uint8_t r = 0;
@@ -224,13 +364,12 @@ static uint8_t GetTreeByte(const TreeDisplayBits& treeBits)
     return r;
 }
 
-//-------------------------------------------------------------------------------------------------
-//	DrawVisual
-//-------------------------------------------------------------------------------------------------
-//
-void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serialPort, NSRect viewBounds )
+static void generateSpectrumData(VisualPluginData * visualPluginData,
+                                 SpectrumData& spectrumData,
+                                 uint32_t& spectSum,
+                                 size_t& fivePercentMin,
+                                 size_t& fivePercentMax)
 {
-
     vector<UInt8> leftSpectrumData, rightSpectrumData;
     leftSpectrumData.reserve(kVisualNumSpectrumEntries);
     rightSpectrumData.reserve(kVisualNumSpectrumEntries);
@@ -240,20 +379,12 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
     rightSpectrumData.assign(visualPluginData->renderData.spectrumData[1],
                              visualPluginData->renderData.spectrumData[1] + kVisualNumSpectrumEntries);
     
-    
-    vector<UInt8> spectrumData;
-    spectrumData.reserve(kVisualNumSpectrumEntries);
     for (int i=0; i<kVisualNumSpectrumEntries; i++) {
         spectrumData.push_back((leftSpectrumData[i] + rightSpectrumData[i]) / 2);
     }
-	
-	// this shouldn't happen but let's be safe
-	if ( visualPluginData->destView == NULL )
-		return;
     
-    const uint32_t spectSum = accumulate(spectrumData.begin(), spectrumData.end(), 0);
-
-    size_t fivePercentMax=0;
+    spectSum = accumulate(spectrumData.begin(), spectrumData.end(), 0);
+    
     {
         uint32_t sumLimit = 0;
         for(int i=spectrumData.size()-1;i>=0;i--){
@@ -264,8 +395,8 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
             }
         }
     }
-	
-    size_t fivePercentMin=0;
+    
+    
     {
         uint32_t sumLimit = 0;
         for(int i=0;i<spectrumData.size();i++){
@@ -280,15 +411,13 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
     if (fivePercentMax <= fivePercentMin) {
         fivePercentMax = fivePercentMin;
     }
-
-    uint32_t specStart = fivePercentMin;
-    uint32_t specWidth = fivePercentMax - fivePercentMin;
-
-    SpectrumData simpleData = scaleSpectrumData(spectrumData, specStart, specWidth, kNumTreeBits);
-
-    SpectrumData smallRibbon = scaleSpectrumData(spectrumData, specStart, specWidth, kNumTreeProgrammableLights/3);
-    SpectrumData ribbonData = scaleSpectrumData(smallRibbon, 0, smallRibbon.size(), kNumTreeProgrammableLights);
     
+}
+
+static void drawSpectrum(const SpectrumData& spectrumData, NSRect viewBounds,
+                  size_t fivePercentMin,
+                  size_t fivePercentMax)
+{
     NSSize viewSize = viewBounds.size;
     CGFloat widthStep = viewSize.width / (CGFloat)spectrumData.size();
     CGFloat heightStep = viewSize.height/512;
@@ -303,7 +432,7 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
         NSRectFill( drawRect );
         
         NSBezierPath* thePath = [NSBezierPath bezierPath];
-
+        
         NSPoint pt = NSMakePoint(widthBase,
                                  heightBase + (spectrumData[0] * heightStep));
         [thePath moveToPoint:pt];
@@ -329,11 +458,11 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
         [thePath setLineWidth:3];
         [[NSColor greenColor] set];
         [thePath stroke];
-
+        
         thePath = [NSBezierPath bezierPath];
         pt = NSMakePoint(widthBase + fivePercentMax*widthStep,
                          heightBase + (spectrumData[fivePercentMax] * heightStep));
-
+        
         [thePath moveToPoint:pt];
         for(int i=fivePercentMax;i<kVisualNumSpectrumEntries;i++){
             pt = NSMakePoint(widthBase + i*widthStep,
@@ -349,18 +478,18 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
         [thePath lineToPoint:NSMakePoint(viewSize.width, viewSize.height/4)];
         [[NSColor whiteColor] set];
         [thePath stroke];
-	
+        
     }
+}
 
-    static BOOL bPrevDidDrawArtwork = NO;
-    BOOL bDrawArtwork = NO;
-    
+static BOOL updateAndDrawInfo(VisualPluginData * visualPluginData)
+{
     if ( time( NULL ) < visualPluginData->drawInfoTimeOut )
     {
         CGPoint where = CGPointMake( 10, 10 );
         
         // if we have a song title, draw it (prefer the stream title over the regular name if we have it)
-        NSString *				theString = NULL;
+        NSString *                theString = NULL;
         
         if ( visualPluginData->streamInfo.streamTitle[0] != 0 )
             theString = [NSString stringWithCharacters:&visualPluginData->streamInfo.streamTitle[1] length:visualPluginData->streamInfo.streamTitle[0]];
@@ -369,7 +498,7 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
         
         if ( theString != NULL )
         {
-            NSDictionary *		attrs = [NSDictionary dictionaryWithObjectsAndKeys:[NSColor whiteColor], NSForegroundColorAttributeName, NULL];
+            NSDictionary *        attrs = [NSDictionary dictionaryWithObjectsAndKeys:[NSColor whiteColor], NSForegroundColorAttributeName, NULL];
             
             [theString drawAtPoint:where withAttributes:attrs];
         }
@@ -382,317 +511,483 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
             [visualPluginData->currentArtwork drawAtPoint:where fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:0.75];
         }
         
-        bDrawArtwork = YES;
+        return YES;
     }
+    return NO;
+}
+
+static void drawRibbonSpectrum(NSRect viewBounds, const SpectrumData& ribbon)
+{
+    NSSize viewSize = viewBounds.size;
+    CGFloat widthBase = 10;
+    CGFloat heightBase = viewSize.height/4;
+        
+    NSBezierPath* thePath = [NSBezierPath bezierPath];
+    CGFloat widthStep = viewSize.width / (CGFloat)ribbon.size();
+    CGFloat heightStep = viewSize.height/256;
+    NSPoint pt = NSMakePoint(widthBase,
+                             heightBase + (ribbon[0] * heightStep));
+    [thePath moveToPoint:pt];
+    for (int i=0; i<ribbon.size(); i++) {
+        pt = NSMakePoint(widthBase + i*widthStep,
+                         heightBase + (ribbon[i] * heightStep));
+        [thePath lineToPoint:pt];
+    }
+    [[NSColor purpleColor] set];
+    [thePath setLineWidth:3];
+    [thePath stroke];
+}
+
+static void drawSimpleLightsDebug(BOOL beatDetected, TreeDisplayBits treeBits, OutputLevels levels)
+{
+    [[NSColor whiteColor] set];
+    NSRectFill(NSMakeRect(300,100, 160, 100));
+    
+    if (beatDetected) {
+        [[NSColor orangeColor] set];
+        NSRectFill(NSMakeRect(300, 50, 40, 40));
+    }
+    
+    for(int i=0;i<kNumTreeBits;i++){
+        
+        BOOL bSet = treeBits[i];
+        CGFloat height = levels[i];
+        
+        NSColor* color = [NSColor colorWithDeviceRed:(i%3==0) ? 1.0 : 0
+                                               green:(i%3==1) ? 1.0 : 0
+                                                blue:(i%3==2) ? 1.0 : 0
+                                               alpha:1];
+        if (!bSet) {
+            color = [NSColor purpleColor];
+        }
+        
+        [color set];
+        NSRectFill(NSMakeRect(300+i*40,100, 40, 100 * height));
+        
+        if (bSet) {
+            NSRectFill(NSMakeRect(300+((i+1)*40),50, 40, 40));
+        }
+    }
+}
+
+static void drawBallLightsDebug(std::vector<NSColor*> colors)
+{
+    if (colors.size() < 25) {
+        return;
+    }
+    
+    NSRect area;
+    area.origin.x = 150;
+    area.origin.y = 100;
+    area.size.width = 100;
+    area.size.height = 100;
+    
+    [[NSColor whiteColor] set];
+    NSRectFill(area);
+    
+    NSRect rowBox = area;
+    rowBox.size.width = 18;
+    rowBox.size.height = 18;
+    
+    for (int i=0; i<5; i++) {
+        NSRect colBox = rowBox;
+        for (int j=0; j<5; j++) {
+            NSColor* col = colors[(i*5) + j];
+            [col set];
+            NSRectFillUsingOperation(colBox, NSCompositingOperationMultiply);
+            colBox.origin.x += 20;
+        }
+        rowBox.origin.y += 20;
+    }
+}
+
+static void updateSimpleLights(const OutputLevels& outputVals,
+                               uint32_t spectSum,
+                               bool bTrackChanged,
+                               TreeDisplayBits& dispTreeBits,
+                               bool& dispBeatDetected,
+                               bool& bSimpleLightsWantSend)
+{
+    TreeDisplayBits treeBits(0);
+    bool beatDetected = false;
+    
+    bSimpleLightsWantSend = NO;
+    
+    static OutputLevelsQueue recentLevelsQueue;
+    static OutputLevelsQueue currentLevelsQueue;
+    static CFTimeInterval prevTime = 0;
+    static std::deque<TreeDisplayBits> prevBits;
+    
+    static std::deque<uint32_t> recentSpectrumSumQueue(1, 0);
+    static std::deque<uint32_t> currentSpectrumSumQueue(1, 0);
+    
+    static OutputLevels lastSetLevels;
+    static OutputLevels lastSetMaxLevels;
+    static TreeDisplayBits lastSetTreeBits;
+    static bool lastSetBeatDetected;
+    
+    if (bTrackChanged) {
+        recentLevelsQueue.clear();
+        currentLevelsQueue.clear();
+        prevBits.clear();
+        recentSpectrumSumQueue.clear();
+        currentSpectrumSumQueue.clear();
+    }
+    
+    CFTimeInterval currTime = CACurrentMediaTime();
+    CFTimeInterval delta = currTime - prevTime;
+    
+    OutputLevels currLevels = outputLevelsQueueMax(currentLevelsQueue);
+    OutputLevels avgRecentLevels = outputLevelsQueueAverage(recentLevelsQueue);
+    OutputLevels maxRecentLevels = outputLevelsQueueMax(recentLevelsQueue);
+    
+    for (int i=0; i<kNumTreeBits; i++) {
+        BOOL bAboveAvg = (currLevels[i] >= avgRecentLevels[i]);
+        //BOOL bAbsoluteThreshold = currLevels[i] > 0.25;
+        BOOL bMinThreshold = currLevels[i] > 0.05;
+        
+        BOOL trigger = (bAboveAvg && bMinThreshold);// || bAbsoluteThreshold;
+        if (trigger) {
+            treeBits.set(i);
+        }
+    }
+    
+    uint32_t currSpectSum = spectSum;
+    if (!recentSpectrumSumQueue.empty() && !currentSpectrumSumQueue.empty())
+    {
+        uint32_t maxSpectSum = *(std::max_element(recentSpectrumSumQueue.begin(), recentSpectrumSumQueue.end()));
+        uint32_t minSpectSum = *(std::min_element(recentSpectrumSumQueue.begin(), recentSpectrumSumQueue.end()));
+        uint32_t avgSpectSum = std::accumulate(recentSpectrumSumQueue.begin(), recentSpectrumSumQueue.end(), 0) / recentSpectrumSumQueue.size();
+        
+        currSpectSum = *(std::max_element(currentSpectrumSumQueue.begin(), currentSpectrumSumQueue.end()));
+        
+        
+        double range = maxSpectSum - minSpectSum;
+        double spectOffset = currSpectSum - minSpectSum;
+        BOOL bThreshold = spectOffset > 0.6 * range;
+        BOOL bAboveAvg = currSpectSum >= avgSpectSum;
+        beatDetected = bAboveAvg && bThreshold;
+        
+        if (beatDetected) {
+            treeBits.set();
+        }
+        
+    }
+    
+    if ((delta * 1000 >= 150)) {
+        
+        prevTime = currTime;
+        
+        recentLevelsQueue.push_front(currLevels);
+        if (recentLevelsQueue.size() >= kLPFSize) {
+            recentLevelsQueue.pop_back();
+        }
+        
+        recentSpectrumSumQueue.push_front(currSpectSum);
+        if (recentSpectrumSumQueue.size() >= 20) {
+            recentSpectrumSumQueue.pop_back();
+        }
+        
+        currentLevelsQueue.clear();
+        currentSpectrumSumQueue.clear();
+        
+        lastSetLevels = currLevels;
+        lastSetTreeBits = treeBits;
+        lastSetMaxLevels = maxRecentLevels;
+        lastSetBeatDetected = beatDetected;
+        
+        bSimpleLightsWantSend = true;
+    }
+    
+    currentLevelsQueue.push_back(outputVals);
+    currentSpectrumSumQueue.push_back(spectSum);
+    
+    dispBeatDetected = lastSetBeatDetected;
+    dispTreeBits = lastSetTreeBits;
+    
+    // Debug Display control levels for simple lights
+    if (1) {
+        drawSimpleLightsDebug(lastSetBeatDetected,
+                              lastSetTreeBits,
+                              lastSetLevels);
+    }
+    
+}
+
+static SpectrumData updateRibbonLights(const SpectrumData& ribbonData, NSRect viewBounds,
+                                       bool bTrackChanged, bool bForceUpdate, bool beatDetected)
+{
+    static CFTimeInterval prevTime = 0;
+    
+    static std::vector<SpectrumData> heldUpData;
+    static float maxAvgIntensity = 0;
+    static SpectrumData maxSpectrumVals;
+    static uint8_t addIntensity = 0;
+    
+    static SpectrumData lastSetRotatedOutput;
+    
+    if (bTrackChanged) {
+        maxAvgIntensity = 0;
+        addIntensity = 0;
+        heldUpData.clear();
+        maxSpectrumVals.clear();
+    }
+    
+    CFTimeInterval currTime = CACurrentMediaTime();
+    CFTimeInterval delta = currTime - prevTime;
+    
+    if ((delta * 1000) >= 50 || bForceUpdate) {
+        
+        prevTime = currTime;
+        
+        // no intensity can be a full 255 since that byte value is reserved
+        SpectrumData outIntensities = ribbonData;
+        
+        if (heldUpData.size()) {
+            
+            heldUpData.push_back(ribbonData);
+            size_t numArr = heldUpData.size();
+            
+            for (int i=0; i<ribbonData.size(); i++) {
+                uint32_t sum = 0;
+                for (auto v : heldUpData ) {
+                    sum += v[i];
+                }
+                uint32_t avg = sum / numArr;
+                outIntensities[i] = avg;
+            }
+        }
+        
+        heldUpData.clear();
+        
+        uint32_t totalIntensity = std::accumulate(outIntensities.begin(), outIntensities.end(), 0);
+        float avgIntensity = (float)totalIntensity / (float)outIntensities.size() / 255.f;
+        maxAvgIntensity = MAX(maxAvgIntensity, avgIntensity);
+        
+        if (avgIntensity >= 0.5 || avgIntensity >= (0.75 * maxAvgIntensity)) {
+            addIntensity = 64;
+        } else {
+            addIntensity = (float)addIntensity * 0.3;
+        }
+        
+        if (addIntensity < 10) {
+            addIntensity = 0;
+        }
+        
+        if (maxSpectrumVals.size() == outIntensities.size()) {
+            for (int i=0; i<outIntensities.size(); i++) {
+                maxSpectrumVals[i] = MAX(outIntensities[i], maxSpectrumVals[i]);
+            }
+        } else {
+            maxSpectrumVals = SpectrumData(outIntensities);
+        }
+        
+        for (int i=0; i<outIntensities.size(); i++) {
+            
+            float maxVal = maxSpectrumVals[i];
+            maxVal = MAX(maxVal, 16);
+            
+            float val = (float)outIntensities[i] / maxVal;
+            
+            if (beatDetected) {
+                val = val * 2;
+            }
+            
+            val = MIN(1.f, MAX(0.f, val));
+            uint8_t inten = (val * 64) + addIntensity;
+            if (inten == 0xDB) {
+                inten = 0xDA;
+            }
+            outIntensities[i] = inten;
+        }
+        
+        std::reverse(outIntensities.begin(),outIntensities.end());
+        
+        lastSetRotatedOutput = outIntensities;
+        return outIntensities;
+        
+    } else {
+        heldUpData.push_back(ribbonData);
+    }
+    
+    if (1) {
+        drawRibbonSpectrum(viewBounds, lastSetRotatedOutput);
+    }
+    
+    return SpectrumData();
+}
+
+static void updateBallLights(const SpectrumData& smallRibbon, VisualView* subview, bool beatDetected, bool bTrackChanged)
+{
+    static CFTimeInterval prevTimeUpdate = 0;
+    static CFTimeInterval prevTimeAnimate = 0;
+    static std::deque<SpectrumData> currRibbonQueue;
+    static std::deque<SpectrumData> recentRibbonQueue;
+    static std::vector<NSColor*> lastSetBallColors;
+    static std::array<CGFloat, kNumBallLights> lastSetBallIntensities;
+    
+    if (bTrackChanged) {
+        currRibbonQueue.clear();
+        recentRibbonQueue.clear();
+    }
+    
+    
+    currRibbonQueue.push_back(smallRibbon);
+    
+    
+    CFTimeInterval currTime = CFAbsoluteTimeGetCurrent();
+    CFTimeInterval deltaUpdate = currTime - prevTimeUpdate;
+    CFTimeInterval deltaAnimate = currTime - prevTimeAnimate;
+    
+    if ((deltaUpdate * 1000) >= 100) {
+        
+        prevTimeUpdate = currTime;
+        
+        SpectrumData avgRibbon = averageSpectrum(currRibbonQueue);
+        recentRibbonQueue.push_front(avgRibbon);
+        if (recentRibbonQueue.size() > 60) {
+            recentRibbonQueue.pop_back();
+        }
+        currRibbonQueue.clear();
+
+        SpectrumData recentMaxRibbon = maxSpectrum(recentRibbonQueue);
+        
+        if (avgRibbon.size() == kNumBallLights)
+        {
+            for (int i=0; i<kNumBallLights; i++) {
+                CGFloat maxI = recentMaxRibbon[i] / 255.0;
+                CGFloat avgI = avgRibbon[i] / 255.0;
+                CGFloat inten = avgI / maxI;
+                if (beatDetected) {
+                    inten *= 1.5;
+                }
+                inten = MIN(1.0, MAX(0.0, inten));
+                inten = (inten * 0.7) + 0.3;
+                lastSetBallIntensities[i] = inten;
+            }
+        }
+    }
+    
+    GCDAsyncUdpSocket* socket = subview.udp_socket;
+    if (socket &&
+        lastSetBallIntensities.size() == kNumBallLights &&
+        (deltaAnimate * 1000) >= 16)
+    {
+        
+        prevTimeAnimate = currTime;
+        
+        auto ballColors = [subview updateBallLights:currTime];
+        if (ballColors.size() != kNumBallLights) {
+            return;
+        }
+        
+        lastSetBallColors.clear();
+        std::vector<uint8_t> msg;
+        for (int i=0; i<kNumBallLights; i++) {
+            NSColor* col = ballColors[i];
+            CGFloat inten = lastSetBallIntensities[i];
+            NSColor* intenCol = [[NSColor clearColor] blendedColorWithFraction:inten ofColor:col];
+            lastSetBallColors.push_back(intenCol);
+            RGB rgbCol = RGB(intenCol);
+            
+            msg.push_back(rgbCol.r);
+            msg.push_back(rgbCol.g);
+            msg.push_back(rgbCol.b);
+
+        }
+        NSData* data = [NSData dataWithBytes:msg.data() length:msg.size() * sizeof(uint8_t)];
+        [socket sendData:data toHost:@"10.0.1.150" port:2390 withTimeout:1.0 tag:0xDEADBEEF];
+    }
+    
+    if (lastSetBallColors.size() == kNumBallLights) {
+        drawBallLightsDebug(lastSetBallColors);
+    }
+}
+
+//-------------------------------------------------------------------------------------------------
+//	DrawVisual
+//-------------------------------------------------------------------------------------------------
+//
+void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serialPort, NSRect viewBounds )
+{
+
+    size_t fivePercentMax=0;
+    size_t fivePercentMin=0;
+    uint32_t spectSum=0;
+    vector<UInt8> spectrumData;
+    spectrumData.reserve(kVisualNumSpectrumEntries);
+    generateSpectrumData(visualPluginData, spectrumData,
+                         spectSum, fivePercentMin, fivePercentMax);
+	
+	// this shouldn't happen but let's be safe
+	if ( visualPluginData->destView == NULL )
+		return;
+    
+    uint32_t specStart = fivePercentMin;
+    uint32_t specWidth = fivePercentMax - fivePercentMin;
+
+    SpectrumData simpleData = scaleSpectrumData(spectrumData, specStart, specWidth, kNumTreeBits);
+    SpectrumData smallRibbon = scaleSpectrumData(spectrumData, specStart, specWidth, kSmallRibbonSize);
+    SpectrumData ribbonData = scaleSpectrumData(smallRibbon, 0, smallRibbon.size(), kRibbonSize);
+    
+    drawSpectrum(spectrumData, viewBounds, fivePercentMin, fivePercentMax);
+
+    static BOOL bPrevDidDrawArtwork = NO;
+    BOOL bDrawArtwork = updateAndDrawInfo(visualPluginData);
     
     OutputLevels outputVals;
     for (int i=0; i<kNumTreeBits; i++) {
         outputVals[i] = simpleData[i]/256.f;
     }
     
+    BOOL bTrackChanged = !bPrevDidDrawArtwork && bDrawArtwork;
+    
     // Compute control bits for simple lights
     TreeDisplayBits dispTreeBits(0);
     bool dispBeatDetected = false;
     bool bSimpleLightsWantSend = false;
-    {
-        TreeDisplayBits treeBits(0);
-        bool beatDetected = false;
-        
-        static OutputLevelsQueue recentLevelsQueue;
-        static OutputLevelsQueue currentLevelsQueue;
-        static CFTimeInterval prevTime = 0;
-        static std::deque<TreeDisplayBits> prevBits;
-        
-        static std::deque<uint32_t> recentSpectrumSumQueue(1, 0);
-        static std::deque<uint32_t> currentSpectrumSumQueue(1, 0);
-        
-        static OutputLevels lastSetLevels;
-        static OutputLevels lastSetMaxLevels;
-        static TreeDisplayBits lastSetTreeBits;
-        static bool lastSetBeatDetected;
-        
-        if (!bPrevDidDrawArtwork && bDrawArtwork) {
-            recentLevelsQueue.clear();
-            currentLevelsQueue.clear();
-            prevBits.clear();
-            recentSpectrumSumQueue.clear();
-            currentSpectrumSumQueue.clear();
-        }
-        
-        CFTimeInterval currTime = CACurrentMediaTime();
-        CFTimeInterval delta = currTime - prevTime;
-        
-        OutputLevels currLevels = outputLevelsQueueMax(currentLevelsQueue);
-        OutputLevels avgRecentLevels = outputLevelsQueueAverage(recentLevelsQueue);
-        OutputLevels maxRecentLevels = outputLevelsQueueMax(recentLevelsQueue);
-        
-        for (int i=0; i<kNumTreeBits; i++) {
-            BOOL bAboveAvg = (currLevels[i] >= avgRecentLevels[i]);
-            //BOOL bAbsoluteThreshold = currLevels[i] > 0.25;
-            BOOL bMinThreshold = currLevels[i] > 0.05;
-            
-            BOOL trigger = (bAboveAvg && bMinThreshold);// || bAbsoluteThreshold;
-            if (trigger) {
-                treeBits.set(i);
-            }
-        }
-        
-        uint32_t currSpectSum = spectSum;
-        if (!recentSpectrumSumQueue.empty() && !currentSpectrumSumQueue.empty())
-        {
-            uint32_t maxSpectSum = *(std::max_element(recentSpectrumSumQueue.begin(), recentSpectrumSumQueue.end()));
-            uint32_t minSpectSum = *(std::min_element(recentSpectrumSumQueue.begin(), recentSpectrumSumQueue.end()));
-            uint32_t avgSpectSum = std::accumulate(recentSpectrumSumQueue.begin(), recentSpectrumSumQueue.end(), 0) / recentSpectrumSumQueue.size();
-            
-            currSpectSum = *(std::max_element(currentSpectrumSumQueue.begin(), currentSpectrumSumQueue.end()));
-            
-            
-            double range = maxSpectSum - minSpectSum;
-            double spectOffset = currSpectSum - minSpectSum;
-            BOOL bThreshold = spectOffset > 0.6 * range;
-            BOOL bAboveAvg = currSpectSum >= avgSpectSum;
-            beatDetected = bAboveAvg && bThreshold;
 
-            if (beatDetected) {
-                treeBits.set();
-            }
-            
-        }
-        
-        if ((delta * 1000 >= 150)) {
-            
-            prevTime = currTime;
-            
-            recentLevelsQueue.push_front(currLevels);
-            if (recentLevelsQueue.size() >= kLPFSize) {
-                recentLevelsQueue.pop_back();
-            }
-            
-            recentSpectrumSumQueue.push_front(currSpectSum);
-            if (recentSpectrumSumQueue.size() >= 20) {
-                recentSpectrumSumQueue.pop_back();
-            }
-            
-            currentLevelsQueue.clear();
-            currentSpectrumSumQueue.clear();
-            
-            lastSetLevels = currLevels;
-            lastSetTreeBits = treeBits;
-            lastSetMaxLevels = maxRecentLevels;
-            lastSetBeatDetected = beatDetected;
-            
-            bSimpleLightsWantSend = true;
-        }
-        
-        currentLevelsQueue.push_back(outputVals);
-        currentSpectrumSumQueue.push_back(spectSum);
-        
-        dispBeatDetected = lastSetBeatDetected;
-        dispTreeBits = lastSetTreeBits;
-        
-        // Debug Display control levels for simple lights
-        if (1) {
-            
-            [[NSColor whiteColor] set];
-            NSRectFill(NSMakeRect(300,100, 160, 100));
-            
-            if (lastSetBeatDetected) {
-                [[NSColor orangeColor] set];
-                NSRectFill(NSMakeRect(300, 50, 40, 40));
-            }
-            
-            for(int i=0;i<kNumTreeBits;i++){
-                
-                BOOL bSet = lastSetTreeBits[i];
-                CGFloat height = lastSetLevels[i];
-                
-                NSColor* color = [NSColor colorWithDeviceRed:(i%3==0) ? 1.0 : 0
-                                                       green:(i%3==1) ? 1.0 : 0
-                                                        blue:(i%3==2) ? 1.0 : 0
-                                                       alpha:1];
-                if (!bSet) {
-                    color = [NSColor purpleColor];
-                }
-                
-                [color set];
-                NSRectFill(NSMakeRect(300+i*40,100, 40, 100 * height));
-                
-                if (bSet) {
-                    NSRectFill(NSMakeRect(300+((i+1)*40),50, 40, 40));
-                }
-            }
-            
-
-        }
-        
-    }
+    updateSimpleLights(outputVals, spectSum, bTrackChanged,
+                       dispTreeBits, dispBeatDetected, bSimpleLightsWantSend);
     
     if (kEmitLEDRibbonIntensity && spectSum > 0) {
         
-        static CFTimeInterval prevTime = 0;
-
-        static std::vector<SpectrumData> heldUpData;
-        static float maxAvgIntensity = 0;
-        static SpectrumData maxSpectrumVals;
-        static uint8_t addIntensity = 0;
         
-        if (!bPrevDidDrawArtwork && bDrawArtwork) {
-            maxAvgIntensity = 0;
-            addIntensity = 0;
-            heldUpData.clear();
-            maxSpectrumVals.clear();
-        }
-        
-        CFTimeInterval currTime = CACurrentMediaTime();
-        CFTimeInterval delta = currTime - prevTime;
-        
-        static SpectrumData lastSetRotatedOutput;
-        
-        if ((delta * 1000) >= 50 || bSimpleLightsWantSend) {
-            
-            prevTime = currTime;
-
-            // no intensity can be a full 255 since that byte value is reserved
-            SpectrumData outIntensities = ribbonData;
-            
-            if (heldUpData.size()) {
-
-                heldUpData.push_back(ribbonData);
-                size_t numArr = heldUpData.size();
-                
-                for (int i=0; i<ribbonData.size(); i++) {
-                    uint32_t sum = 0;
-                    for (auto v : heldUpData ) {
-                        sum += v[i];
-                    }
-                    uint32_t avg = sum / numArr;
-                    outIntensities[i] = avg;
-                }
-            }
-            
-            uint32_t totalIntensity = std::accumulate(outIntensities.begin(), outIntensities.end(), 0);
-            float avgIntensity = (float)totalIntensity / (float)outIntensities.size() / 255.f;
-            maxAvgIntensity = MAX(maxAvgIntensity, avgIntensity);
-            
-            if (avgIntensity >= 0.5 || avgIntensity >= (0.75 * maxAvgIntensity)) {
-                addIntensity = 64;
-            } else {
-                addIntensity = (float)addIntensity * 0.3;
-            }
-            
-            if (addIntensity < 10) {
-                addIntensity = 0;
-            }
-            
-            if (maxSpectrumVals.size() == outIntensities.size()) {
-                for (int i=0; i<outIntensities.size(); i++) {
-                    maxSpectrumVals[i] = MAX(outIntensities[i], maxSpectrumVals[i]);
-                }
-            } else {
-                maxSpectrumVals = SpectrumData(outIntensities);
-            }
-            
-            for (int i=0; i<outIntensities.size(); i++) {
-                
-                float maxVal = maxSpectrumVals[i];
-                maxVal = MAX(maxVal, 16);
-                
-                float val = (float)outIntensities[i] / maxVal;
-                
-                if (dispBeatDetected) {
-                    val = val * 2;
-                }
-                
-                val = MIN(1.f, MAX(0.f, val));
-                uint8_t inten = (val * 64) + addIntensity;
-                if (inten == 0xDB) {
-                    inten = 0xDA;
-                }
-                outIntensities[i] = inten;
-            }
-            
-            SpectrumData tmp = outIntensities;
-            std::reverse(tmp.begin(),tmp.end());
+        SpectrumData rotatedOutput = updateRibbonLights(ribbonData, viewBounds,
+                                                        bTrackChanged, bSimpleLightsWantSend, dispBeatDetected);
+        if (!rotatedOutput.empty()){
             
             // add the bits to control the basic lights
             uint8_t treeByte = GetTreeByte(dispTreeBits);
             if (dispBeatDetected) {
                 treeByte = treeByte | 0x1;
             }
+            treeByte &= 0xF;
             
-            SpectrumData rotatedOutput;
 #if FORCE_LIGHTS_OFF
-            for (int i=0; i<150; i++) {
+            rotatedOutput.clear();
+            for (int i=0; i<75; i++) {
                 rotatedOutput.push_back(0xAA);
             }
             treeByte = 0xf;
-#else
-            NSLog(@"DBS: pushing intensities");
-            rotatedOutput.insert(rotatedOutput.end(), tmp.begin(), tmp.end());
-            tmp = outIntensities;
-            rotatedOutput.insert(rotatedOutput.end(), tmp.begin(), tmp.end());
 #endif
-            lastSetRotatedOutput = rotatedOutput;
+            
             rotatedOutput.push_back(treeByte);
             // add a footer of 0xDB to say we are done with this command
             rotatedOutput.push_back(0xDB);
             
+            NSData* data = [NSData dataWithBytes:rotatedOutput.data() length:rotatedOutput.size() * sizeof(uint8_t)];
             if (serialPort) {
                 //NSLog(@"DBS: spew: TreeByte %x", treeByte);
                 //NSLog(@"DBS: spew: Pushing %ld bytes to serial %@\n", rotatedOutput.size(), serialPort);
-            }
-            
-            NSData* data = [NSData dataWithBytes:rotatedOutput.data() length:rotatedOutput.size() * sizeof(uint8_t)];
-            if (serialPort) {
                 [serialPort sendData:data];
             }
-            
-            
-#if 0
-            GCDAsyncUdpSocket* socket = visualPluginData->subview.udp_socket;
-            if (socket && smallRibbon.size() == 25)
-            {
-             
-                std::vector<uint8_t> msg;
-                for (int i=0; i<25; i++) {
-                    uint8_t a = smallRibbon[i] / 2;
-                    if (dispBeatDetected) {
-                        a *= 2;
-                    }
-                    msg.push_back(a);
-                    msg.push_back(a);
-                    msg.push_back(a);
-                }
-                NSData* data = [NSData dataWithBytes:msg.data() length:msg.size() * sizeof(uint8_t)];
-                [socket sendData:data toHost:@"10.0.1.150" port:2390 withTimeout:1.0 tag:0xDEADBEEF];
-            }
-#endif
-            
-            heldUpData.clear();
-            
-        } else {
-            heldUpData.push_back(ribbonData);
         }
+    }
+    
+    if (1) {
         
-        
-        if (1) {
-            
-            NSBezierPath* thePath = [NSBezierPath bezierPath];
-            widthStep = viewSize.width / (CGFloat)lastSetRotatedOutput.size();
-            heightStep = viewSize.height/256;
-            NSPoint pt = NSMakePoint(widthBase,
-                                     heightBase + (lastSetRotatedOutput[0] * heightStep));
-            [thePath moveToPoint:pt];
-            for (int i=0; i<lastSetRotatedOutput.size(); i++) {
-                pt = NSMakePoint(widthBase + i*widthStep,
-                                 heightBase + (lastSetRotatedOutput[i] * heightStep));
-                [thePath lineToPoint:pt];
-            }
-            [[NSColor purpleColor] set];
-            [thePath setLineWidth:3];
-            [thePath stroke];
-            
-        }
+        updateBallLights(smallRibbon, visualPluginData->subview, dispBeatDetected, bTrackChanged);
         
     }
 	
@@ -709,8 +1004,8 @@ void ResetSerialTree( VisualPluginData * visualPluginData )
         
         std::array<uint8_t, 152> msg;
         
-        for (int i=0; i<150; i++) {
-            msg[i] = 128;
+        for (int i=0; i<75; i++) {
+            msg[i] = 32;
         }
         msg[150] = 0xf;
         msg[151] = 0xDB;
@@ -832,10 +1127,14 @@ OSStatus DeactivateVisual( VisualPluginData * visualPluginData )
 //	ResizeVisual
 //-------------------------------------------------------------------------------------------------
 //
+
+static int currResizeJobID = 0;
+
 OSStatus ResizeVisual( VisualPluginData * visualPluginData )
 {
     NSView* destView = visualPluginData->destView;
     NSRect destBounds = destView.bounds;
+    
     VisualView* subview = visualPluginData->subview;
     subview.frame = destBounds;
     return noErr;
@@ -883,6 +1182,17 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
     self = [super initWithFrame:frameRect];
     if (self) {
         [self setupSerialPort];
+        
+        for (int i=0; i<kNumBallLights; i++) {
+            BallLight ball;
+            ball.startColor = randomBallColor();
+            ball.endColor = randomBallColor();
+            while (ball.startColor == ball.endColor) {
+                ball.endColor = randomBallColor();
+            }
+            _ballLights.push_back(ball);
+        }
+        
     }
     return self;
 }
@@ -892,6 +1202,20 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
     [self cleanupSerialPort];
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
     [nc removeObserver:self];
+}
+
+- (std::vector<NSColor*>)updateBallLights:(CFAbsoluteTime)t
+{
+    std::vector<NSColor*> ballColors;
+    for (auto& ball : _ballLights) {
+        ball.updateForTime(t);
+        NSColor* c = ball.currColor;
+        if (c == nil) {
+            c = [NSColor whiteColor];
+        }
+        ballColors.push_back(c);
+    }
+    return ballColors;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1036,7 +1360,7 @@ OSStatus ConfigureVisual( VisualPluginData * visualPluginData )
 {
     if (data.length >= 1) {
         const uint8_t* bytes = (const uint8_t*)data.bytes;
-        if (bytes[0] == 0xee || bytes[1] == 0xee) {
+        if (!(bytes[0] == 0xdb) && !(bytes[1] == 0xdb)) {
             NSLog(@"DBS: Error Received Data (%ld) %x %x", data.length, bytes[0], bytes[1]);
         }
     }
