@@ -89,7 +89,9 @@ static const size_t kSmallRibbonSize = 25;
 static const size_t kNumBallLights = 25;
 static const size_t kLPFSize = 10;
 
-static const CFTimeInterval kBallLightAnimationDuration = 4.0;
+static const CFTimeInterval kBallLightAnimationDuration = 0.75;
+static const CFTimeInterval kBallLightAnimationHold = kBallLightAnimationDuration * 4;
+static const CFTimeInterval kBallLightAnimationPeriod = kBallLightAnimationDuration + kBallLightAnimationHold;
 
 #if USE_SUBVIEW
 
@@ -119,33 +121,52 @@ struct BallLight {
     
     NSColor* currColor = nil;
     
+    double getRandomOffset(bool useOffset) const {
+        if (!useOffset) {
+            return 0.0;
+        }
+        
+        uint32_t offset_ms = arc4random_uniform((uint32_t)(kBallLightAnimationPeriod  * 0.75 * 1000.0));
+        double random_offset = (double)offset_ms / 1000.0;
+        return random_offset;
+    }
+    
     void updateForTime(CFAbsoluteTime t) {
         
         if (!startColor || !endColor) {
             return;
         }
         
+        bool bUseOffset = false;
+        
         if (animStart == 0 || animEnd == 0 || animStart >= animEnd) {
             animStart = t;
             animEnd = t + kBallLightAnimationDuration;
+            bUseOffset = true;
         }
         
         if (t <= animStart) {
-            
             animStart = t;
-            animEnd = t + kBallLightAnimationDuration;
+            animEnd = t + kBallLightAnimationDuration + getRandomOffset(bUseOffset);
             currColor = startColor;
             
         } else if (t >= animEnd) {
             
             currColor = endColor;
             
-            startColor = endColor;
-            while (startColor == endColor) {
-                endColor = randomBallColor();
+            if (startColor == endColor) {
+                startColor = endColor;
+                while (startColor == endColor) {
+                    endColor = randomBallColor();
+                }
+                animStart = t;
+                animEnd = t + kBallLightAnimationDuration + getRandomOffset(bUseOffset);;
+            } else {
+                startColor = endColor;
+                animStart = t;
+                animEnd = t + (4 * kBallLightAnimationDuration) + getRandomOffset(bUseOffset);
             }
-            animStart = t;
-            animEnd = t + kBallLightAnimationDuration;
+
             
         } else {
             
@@ -200,7 +221,7 @@ typedef std::array<float, kNumTreeBits> OutputLevels;
 typedef std::bitset<kNumTreeBits> TreeDisplayBits;
 typedef std::deque<OutputLevels> OutputLevelsQueue;
 
-static const bool kEmitLEDRibbonIntensity = true;
+static const bool kEmitLEDRibbonIntensity = false;
 
 
 
@@ -211,13 +232,13 @@ static const std::vector<NSColor*>& getDefaultBallColors()
     dispatch_once(&onceToken, ^{
         cols.push_back([[NSColor redColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
         cols.push_back([[NSColor orangeColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
-        cols.push_back([[NSColor yellowColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
+        //cols.push_back([[NSColor yellowColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
         cols.push_back([[NSColor greenColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
         cols.push_back([[NSColor blueColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
-        //cols.push_back([[NSColor purpleColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
-        cols.push_back([[NSColor whiteColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
+        cols.push_back([[NSColor purpleColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
+        //cols.push_back([[NSColor whiteColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
         //cols.push_back([[NSColor cyanColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
-        cols.push_back([[NSColor magentaColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
+        //cols.push_back([[NSColor magentaColor] colorUsingColorSpace:[NSColorSpace genericRGBColorSpace]]);
     });
     return cols;
 }
@@ -817,7 +838,7 @@ static SpectrumData updateRibbonLights(const SpectrumData& ribbonData, NSRect vi
     return SpectrumData();
 }
 
-static void updateBallLights(const SpectrumData& smallRibbon, VisualView* subview, bool beatDetected, bool bTrackChanged)
+static void updateBallLights(const SpectrumData& smallRibbon, VisualView* subview, bool beatDetected, bool bTrackChanged, bool bSilence)
 {
     static CFTimeInterval prevTimeUpdate = 0;
     static CFTimeInterval prevTimeAnimate = 0;
@@ -857,12 +878,11 @@ static void updateBallLights(const SpectrumData& smallRibbon, VisualView* subvie
             for (int i=0; i<kNumBallLights; i++) {
                 CGFloat maxI = recentMaxRibbon[i] / 255.0;
                 CGFloat avgI = avgRibbon[i] / 255.0;
-                CGFloat inten = avgI / maxI;
+                CGFloat inten = (avgI / maxI);
                 if (beatDetected) {
                     inten *= 1.5;
                 }
                 inten = MIN(1.0, MAX(0.0, inten));
-                inten = (inten * 0.7) + 0.3;
                 lastSetBallIntensities[i] = inten;
             }
         }
@@ -886,7 +906,11 @@ static void updateBallLights(const SpectrumData& smallRibbon, VisualView* subvie
         for (int i=0; i<kNumBallLights; i++) {
             NSColor* col = ballColors[i];
             CGFloat inten = lastSetBallIntensities[i];
+            
             NSColor* intenCol = [[NSColor clearColor] blendedColorWithFraction:inten ofColor:col];
+            if (bSilence) {
+                intenCol = col;
+            }
             lastSetBallColors.push_back(intenCol);
             RGB rgbCol = RGB(intenCol);
             
@@ -918,6 +942,8 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
     spectrumData.reserve(kVisualNumSpectrumEntries);
     generateSpectrumData(visualPluginData, spectrumData,
                          spectSum, fivePercentMin, fivePercentMax);
+    
+    bool bSilence = (spectSum / (spectrumData.size() + 1)) < 3;
 	
 	// this shouldn't happen but let's be safe
 	if ( visualPluginData->destView == NULL )
@@ -928,7 +954,10 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
 
     SpectrumData simpleData = scaleSpectrumData(spectrumData, specStart, specWidth, kNumTreeBits);
     SpectrumData smallRibbon = scaleSpectrumData(spectrumData, specStart, specWidth, kSmallRibbonSize);
-    SpectrumData ribbonData = scaleSpectrumData(smallRibbon, 0, smallRibbon.size(), kRibbonSize);
+    SpectrumData ribbonData;
+    if (kEmitLEDRibbonIntensity) {
+        ribbonData = scaleSpectrumData(smallRibbon, 0, smallRibbon.size(), kRibbonSize);
+    }
     
     drawSpectrum(spectrumData, viewBounds, fivePercentMin, fivePercentMax);
 
@@ -951,7 +980,6 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
                        dispTreeBits, dispBeatDetected, bSimpleLightsWantSend);
     
     if (kEmitLEDRibbonIntensity && spectSum > 0) {
-        
         
         SpectrumData rotatedOutput = updateRibbonLights(ribbonData, viewBounds,
                                                         bTrackChanged, bSimpleLightsWantSend, dispBeatDetected);
@@ -983,11 +1011,31 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
                 [serialPort sendData:data];
             }
         }
+    } else if (bSimpleLightsWantSend) {
+        
+        // add the bits to control the basic lights
+        uint8_t treeByte = GetTreeByte(dispTreeBits);
+        if (dispBeatDetected) {
+            treeByte = treeByte | 0x1;
+        }
+        treeByte &= 0xF;
+        
+#if FORCE_LIGHTS_OFF
+        treeByte = 0xf;
+#endif
+        
+        NSData* data = [NSData dataWithBytes:&treeByte length:sizeof(treeByte)];
+        if (serialPort) {
+            //NSLog(@"DBS: spew: TreeByte %x", treeByte);
+            //NSLog(@"DBS: spew: Pushing %ld bytes to serial %@\n", rotatedOutput.size(), serialPort);
+            [serialPort sendData:data];
+        }
+        
     }
     
     if (1) {
         
-        updateBallLights(smallRibbon, visualPluginData->subview, dispBeatDetected, bTrackChanged);
+        updateBallLights(smallRibbon, visualPluginData->subview, dispBeatDetected, bTrackChanged, bSilence);
         
     }
 	
