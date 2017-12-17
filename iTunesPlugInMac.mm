@@ -379,7 +379,7 @@ static uint8_t GetTreeByte(const TreeDisplayBits& treeBits)
     uint8_t r = 0;
     for (int i=0; i<kNumTreeBits; i++) {
         if (treeBits[i]) {
-            r = r | (1<<(i+1));
+            r = r | (1<<i);
         }
     }
     return r;
@@ -987,9 +987,6 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
             
             // add the bits to control the basic lights
             uint8_t treeByte = GetTreeByte(dispTreeBits);
-            if (dispBeatDetected) {
-                treeByte = treeByte | 0x1;
-            }
             treeByte &= 0xF;
             
 #if FORCE_LIGHTS_OFF
@@ -1015,9 +1012,6 @@ void DrawVisualView_( VisualPluginData * visualPluginData, ORSSerialPort* serial
         
         // add the bits to control the basic lights
         uint8_t treeByte = GetTreeByte(dispTreeBits);
-        if (dispBeatDetected) {
-            treeByte = treeByte | 0x1;
-        }
         treeByte &= 0xF;
         
 #if FORCE_LIGHTS_OFF

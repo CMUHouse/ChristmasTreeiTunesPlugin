@@ -1,0 +1,29 @@
+#######################################
+# Syntax Coloring Map For Adafruit_NeoPixel
+####################################### 
+# Class
+#######################################
+
+RGBColor	KEYWORD1
+BallLight	KEYWORD1
+
+#######################################
+# Methods and Functions 
+#######################################	
+
+blend			KEYWORD2
+updateForTime	KEYWORD2
+
+
+#######################################
+# Constants
+#######################################
+
+WHITE		LITERAL1
+BLACK		LITERAL1
+RED			LITERAL1
+GREEN		LITERAL1
+BLUE		LITERAL1
+ORANGE		LITERAL1
+YELLOW		LITERAL1
+PURPLE		LITERAL1
