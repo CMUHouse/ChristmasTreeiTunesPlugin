@@ -4,7 +4,7 @@
 #endif
 
 #define PIN 6
-#define TIMEOUT 15
+#define TIMEOUT 5
 
 unsigned long t0 = millis();
 unsigned long second_counter = millis();
@@ -34,10 +34,8 @@ void setup() {
 }
 
 void set_on() {
-  digitalWrite(2, HIGH);
-  digitalWrite(3, HIGH);
-  digitalWrite(4, HIGH);
-  digitalWrite(5, HIGH);
+  simpleLightBits = 0xf;
+  setSimpleLights(simpleLightBits);
 }
 
 void serialDelay(uint8_t wait) {
